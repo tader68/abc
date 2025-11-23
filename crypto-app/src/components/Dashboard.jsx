@@ -10,7 +10,7 @@ import { runBacktest } from '../utils/backtest';
 import { optimizeStrategy } from '../utils/optimizer';
 import { analyzeNewsWithGemini } from '../services/gemini';
 
-const Dashboard = ({ onAddToPortfolio, news, globalMetrics, isAutoTrading, isScalping, trades, strategyParams, setStrategyParams, isOptimizing }) => {
+const Dashboard = ({ onAddToPortfolio, news, globalMetrics, isAutoTrading, isScalping, trades, strategyParams, setStrategyParams, isOptimizing, onOptimize }) => {
     const [symbol, setSymbol] = useState('BTCUSDT');
     const [price, setPrice] = useState(null);
     const [klines, setKlines] = useState([]);
@@ -114,10 +114,10 @@ const Dashboard = ({ onAddToPortfolio, news, globalMetrics, isAutoTrading, isSca
         setIsBacktesting(false);
     };
 
-    // Manual optimize button (optional, since App.jsx runs it automatically)
     const handleOptimize = async () => {
-        // We can trigger a re-run or just show a message
-        alert("Optimization is handled automatically by the AI Engine in the background.");
+        if (onOptimize) {
+            onOptimize();
+        }
     };
 
     return (

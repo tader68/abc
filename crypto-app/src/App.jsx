@@ -119,25 +119,26 @@ function App() {
   const [strategyParams, setStrategyParams] = useState({ rsiLower: 30, rsiUpper: 70, tpMult: 2, slMult: 1.5 });
   const [isOptimizing, setIsOptimizing] = useState(false);
 
-  useEffect(() => {
-    const runOptimization = async () => {
-      setIsOptimizing(true);
-      try {
-        const { optimizeStrategy } = await import('./utils/optimizer');
-        const { SUPPORTED_COINS } = await import('./services/api');
-        // Run optimization in background
-        console.log("Starting Background Optimization...");
-        const bestParams = await optimizeStrategy(SUPPORTED_COINS);
-        setStrategyParams(bestParams);
-        console.log("Strategy Updated with Best Params:", bestParams);
-      } catch (e) {
-        console.error("Optimization Failed:", e);
-      } finally {
-        setIsOptimizing(false);
-      }
-    };
+  const runOptimization = async () => {
+    if (isOptimizing) return;
+    setIsOptimizing(true);
+    try {
+      const { optimizeStrategy } = await import('./utils/optimizer');
+      const { SUPPORTED_COINS } = await import('./services/api');
+      // Run optimization in background
+      console.log("Starting Background Optimization...");
+      const bestParams = await optimizeStrategy(SUPPORTED_COINS);
+      setStrategyParams(bestParams);
+      console.log("Strategy Updated with Best Params:", bestParams);
+    } catch (e) {
+      console.error("Optimization Failed:", e);
+    } finally {
+      setIsOptimizing(false);
+    }
+  };
 
-    // Run once on startup (or could be triggered periodically)
+  useEffect(() => {
+    // Run once on startup
     runOptimization();
   }, []);
 
@@ -361,6 +362,10 @@ function App() {
           isAutoTrading={isAutoTrading}
           isScalping={isScalping}
           trades={trades}
+          strategyParams={strategyParams}
+          setStrategyParams={setStrategyParams}
+          isOptimizing={isOptimizing}
+          onOptimize={runOptimization}
         />
 
         {isDataLoaded && (
