@@ -73,8 +73,8 @@ const MarketScanner = ({ onAutoTrade, isAutoTrading, onScanUpdate, news, isScalp
                 if (executedCount >= MAX_TRADES_PER_SCAN) break;
 
                 const { signal, symbol } = res;
-                // Only consider LONG/SHORT signals with Score >= 4
-                if ((signal.type === 'LONG' || signal.type === 'SHORT') && Math.abs(signal.score) >= 4) {
+                // Only consider LONG/SHORT signals with Score >= 3 (Includes Mean Reversion)
+                if ((signal.type === 'LONG' || signal.type === 'SHORT') && Math.abs(signal.score) >= 3) {
                     const isActive = tradesRef.current.some(t => t.symbol === symbol && t.status === 'OPEN');
                     if (!isActive) {
                         onAutoTrade({ ...signal, symbol, timestamp: Date.now() });
