@@ -319,6 +319,57 @@ export const generateSignal = (currentPrice, klinesPrimary, klinesTrend = [], pa
         reasons.push(`${sentimentReason} (${sentimentScore > 0 ? '+' : ''}${sentimentScore.toFixed(1)})`);
     }
 
+    // --- NEW: MEAN REVERSION STRATEGY (SIDEWAY MARKET) ---
+    // Trigger if Trend Strength (ADX) is weak (< 25)
+    if (adx < 25) {
+        const slDistMR = atr * 1.5; // Tighter SL for mean reversion
+
+        // LONG SETUP: Price touches Lower Band + RSI Oversold
+        if (currentPrice <= bb.lower && rsi < 30) {
+            return {
+                type: 'LONG',
+                entry: currentPrice,
+                tp: bb.middle, // Target is Mean (Middle Band)
+                tp1: currentPrice + (bb.middle - currentPrice) * 0.5,
+                tp2: bb.middle,
+                tp3: bb.upper, // Moonshot target
+                sl: currentPrice - slDistMR,
+                leverage: 5, // Lower leverage for counter-trend
+                reason: `Mean Reversion: Lower BB Bounce (RSI ${rsi.toFixed(1)})`,
+                score: 3, // Moderate score
+                indicators: { rsi, macd, bb, volume: volumeAnalysis, trend: trendPrimary, adx, atr, trendHigher, patterns, sentiment: sentimentScore }
+            };
+        }
+
+        // SHORT SETUP: Price touches Upper Band + RSI Overbought
+        if (currentPrice >= bb.upper && rsi > 70) {
+            return {
+                type: 'SHORT',
+                entry: currentPrice,
+                tp: bb.middle, // Target is Mean (Middle Band)
+                tp1: currentPrice - (currentPrice - bb.middle) * 0.5,
+                tp2: bb.middle,
+                tp3: bb.lower, // Moonshot target
+                sl: currentPrice + slDistMR,
+                leverage: 5, // Lower leverage for counter-trend
+                reason: `Mean Reversion: Upper BB Bounce (RSI ${rsi.toFixed(1)})`,
+                score: -3, // Moderate score
+                indicators: { rsi, macd, bb, volume: volumeAnalysis, trend: trendPrimary, adx, atr, trendHigher, patterns, sentiment: sentimentScore }
+            };
+        }
+
+        // If Sideway but no setup, return NEUTRAL immediately (Don't force Trend Following)
+        return {
+            type: 'NEUTRAL',
+            entry: currentPrice,
+            tp: 0, sl: 0, leverage: 1,
+            reason: `Sideway Market (ADX ${adx.toFixed(1)}). Waiting for BB Bounce.`,
+            indicators: { rsi, macd, bb, volume: volumeAnalysis, trend: trendPrimary, adx, atr, trendHigher, sentiment: sentimentScore }
+        };
+    }
+
+    // --- EXISTING: TREND FOLLOWING STRATEGY (ADX >= 25) ---
+
     // 1. Multi-Timeframe Trend Filter (The "King")
     if (trendHigher.includes('UP')) {
         if (trendPrimary === 'UP') { score += 2; reasons.push(`MTF Alignment (${higherTimeframeLabel}+${timeframeLabel} Bull)`); }
@@ -328,16 +379,8 @@ export const generateSignal = (currentPrice, klinesPrimary, klinesTrend = [], pa
         else { score += 1; reasons.push(`Trend Conflict (${higherTimeframeLabel} Down, ${timeframeLabel} Up)`); }
     }
 
-    // 2. ADX Filter
-    if (adx < 20) {
-        return {
-            type: 'NEUTRAL',
-            entry: currentPrice,
-            tp: 0, sl: 0, leverage: 1,
-            reason: `Market Chop (ADX: ${adx.toFixed(1)})`,
-            indicators: { rsi, macd, bb, volume: volumeAnalysis, trend: trendPrimary, adx, atr, trendHigher, sentiment: sentimentScore }
-        };
-    }
+    // 2. ADX Filter (Handled by Regime Detection above)
+    // if (adx < 20) { ... } -> Removed to allow Mean Reversion
 
     // 3. Price Action Triggers
     if (patterns.includes('Bullish Engulfing') || patterns.includes('Hammer/Pinbar')) {

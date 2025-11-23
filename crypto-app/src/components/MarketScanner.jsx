@@ -28,15 +28,25 @@ const MarketScanner = ({ onAutoTrade, isAutoTrading, onScanUpdate, news, isScalp
         const MAX_TRADES_PER_SCAN = 3;
 
         // Process in chunks
+        let skippedCount = 0;
         for (const coin of SUPPORTED_COINS) {
             try {
+                // 1. Universe Filter: Check Volume first
+                const stats = await import('../services/api').then(m => m.fetch24hTicker(coin.symbol));
+
+                // Filter: Min Volume $10M
+                if (!stats || stats.quoteVolume < 10000000) {
+                    skippedCount++;
+                    continue;
+                }
+
                 const price = await fetchCryptoPrice(coin.symbol);
                 const klinesPrimary = await fetchKlines(coin.symbol, primaryTimeframe);
                 const klinesTrend = await fetchKlines(coin.symbol, trendTimeframe);
 
                 if (price && klinesPrimary.length > 0) {
                     const signal = generateSignal(price, klinesPrimary, klinesTrend, strategyParams, newsRef.current, null, isScalping ? '15m' : '1H', coin.symbol, coin.name);
-                    const result = { ...coin, price, signal };
+                    const result = { ...coin, price, signal, volume: stats.quoteVolume };
                     results.push(result);
                 }
             } catch (e) {
@@ -44,6 +54,7 @@ const MarketScanner = ({ onAutoTrade, isAutoTrading, onScanUpdate, news, isScalp
             }
             await new Promise(r => setTimeout(r, 100)); // Faster scan (100ms)
         }
+        console.log(`Scanner: Filtered out ${skippedCount} low-volume coins.`);
 
         // Sorting: Strong Signals -> Signals -> Neutral
         results.sort((a, b) => {

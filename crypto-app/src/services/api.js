@@ -10,6 +10,21 @@ export const fetchCryptoPrice = async (symbol = 'BTCUSDT') => {
   }
 };
 
+export const fetch24hTicker = async (symbol) => {
+  try {
+    const response = await fetch(`/api/v3/ticker/24hr?symbol=${symbol}`);
+    const data = await response.json();
+    return {
+      symbol: data.symbol,
+      quoteVolume: parseFloat(data.quoteVolume), // Volume in USDT
+      priceChangePercent: parseFloat(data.priceChangePercent)
+    };
+  } catch (error) {
+    console.error("Error fetching 24h ticker:", error);
+    return null;
+  }
+};
+
 export const fetchKlines = async (symbol = 'BTCUSDT', interval = '1h', limit = 100) => {
   try {
     const response = await fetch(`/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
