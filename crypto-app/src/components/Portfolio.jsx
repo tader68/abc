@@ -237,7 +237,7 @@ const Portfolio = ({ trades, onCloseTrade, onUpdateTrade, onPartialClose, market
                                     <span className={`trade-type ${trade.type.toLowerCase()}`}>{trade.type}</span>
                                 </div>
                                 <div className="trade-info">
-                                    <span>Entry: ${trade.entry.toFixed(2)}</span>
+                                    <span>Entry: ${trade.entry.toFixed(2)} <span style={{ fontSize: '0.85em', color: '#aaa', marginLeft: '5px' }}>({marketData[trade.symbol] ? `$${marketData[trade.symbol].toFixed(2)}` : '...'})</span></span>
                                     <span>Lev: {trade.leverage}x</span>
                                 </div>
 
