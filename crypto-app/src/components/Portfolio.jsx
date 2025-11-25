@@ -129,7 +129,7 @@ const Portfolio = ({ trades, onCloseTrade, onUpdateTrade, onPartialClose, market
         });
     }, [trades, marketData, onCloseTrade, onPartialClose]);
 
-    const [filterStatus, setFilterStatus] = useState('ALL'); // ALL, OPEN, CLOSED
+    const [filterStatus, setFilterStatus] = useState('OPEN'); // ALL, OPEN, CLOSED
     const [filterType, setFilterType] = useState('ALL'); // ALL, LONG, SHORT
     const [sortOrder, setSortOrder] = useState('NEWEST'); // NEWEST, OLDEST, PNL_HIGH, PNL_LOW
 
