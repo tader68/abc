@@ -4,6 +4,8 @@ import Dashboard from './components/Dashboard';
 import Portfolio from './components/Portfolio';
 import MarketScanner from './components/MarketScanner';
 import { sendTelegramMessage, formatSignalMessage } from './services/telegram';
+import { fetchCryptoPrice, fetchCryptoNews, fetchGlobalMetrics, SUPPORTED_COINS } from './services/api';
+import { optimizeStrategy } from './utils/optimizer';
 import './App.css';
 
 function App() {
@@ -85,8 +87,8 @@ function App() {
   // Fetch News and Global Metrics
   useEffect(() => {
     const fetchInfo = async () => {
-      const newsData = await import('./services/api').then(m => m.fetchCryptoNews());
-      const metricsData = await import('./services/api').then(m => m.fetchGlobalMetrics());
+      const newsData = await fetchCryptoNews();
+      const metricsData = await fetchGlobalMetrics();
       setNews(newsData);
       setGlobalMetrics(metricsData);
     };
@@ -104,7 +106,7 @@ function App() {
 
       const newPrices = {};
       await Promise.all(activeSymbols.map(async (symbol) => {
-        const price = await import('./services/api').then(m => m.fetchCryptoPrice(symbol));
+        const price = await fetchCryptoPrice(symbol);
         if (price) newPrices[symbol] = price;
       }));
 
@@ -123,8 +125,6 @@ function App() {
     if (isOptimizing) return;
     setIsOptimizing(true);
     try {
-      const { optimizeStrategy } = await import('./utils/optimizer');
-      const { SUPPORTED_COINS } = await import('./services/api');
       // Run optimization in background
       console.log("Starting Background Optimization...");
       const bestParams = await optimizeStrategy(SUPPORTED_COINS);
