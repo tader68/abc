@@ -325,7 +325,8 @@ export const generateSignal = (currentPrice, klinesPrimary, klinesTrend = [], pa
         const slDistMR = atr * 1.5; // Tighter SL for mean reversion
 
         // LONG SETUP: Price touches Lower Band + RSI Oversold
-        if (currentPrice <= bb.lower && rsi < 30) {
+        // GUARD: Don't Long if Higher Timeframe is STRONG DOWN
+        if (currentPrice <= bb.lower && rsi < 30 && trendHigher !== 'STRONG_DOWN') {
             return {
                 type: 'LONG',
                 entry: currentPrice,
@@ -342,7 +343,8 @@ export const generateSignal = (currentPrice, klinesPrimary, klinesTrend = [], pa
         }
 
         // SHORT SETUP: Price touches Upper Band + RSI Overbought
-        if (currentPrice >= bb.upper && rsi > 70) {
+        // GUARD: Don't Short if Higher Timeframe is STRONG UP
+        if (currentPrice >= bb.upper && rsi > 70 && trendHigher !== 'STRONG_UP') {
             return {
                 type: 'SHORT',
                 entry: currentPrice,
