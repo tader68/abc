@@ -401,7 +401,18 @@ export const generateSignal = (currentPrice, klinesPrimary, klinesTrend = [], pa
 
     // 5. RSI & MACD (Momentum)
     if (rsi < params.rsiLower) { score += 1; reasons.push(`RSI Oversold (<${params.rsiLower})`); }
-    if (rsi > params.rsiUpper) { score -= 1; reasons.push(`RSI Overbought (>${params.rsiUpper})`); }
+
+    // MODIFIED: Relax RSI Overbought penalty in Strong Uptrend
+    if (rsi > params.rsiUpper) {
+        if (trendHigher === 'STRONG_UP') {
+            score += 0.5; // Actually bullish in a strong trend!
+            reasons.push(`RSI High (Strong Trend)`);
+        } else {
+            score -= 1;
+            reasons.push(`RSI Overbought (>${params.rsiUpper})`);
+        }
+    }
+
     if (macd.histogram > 0 && macd.macd > macd.signal) { score += 1; reasons.push("MACD Bull"); }
     if (macd.histogram < 0 && macd.macd < macd.signal) { score -= 1; reasons.push("MACD Bear"); }
 
@@ -409,6 +420,13 @@ export const generateSignal = (currentPrice, klinesPrimary, klinesTrend = [], pa
     if (volumeAnalysis.isSpike) {
         if (score > 0) { score += 1; reasons.push("Vol Spike"); }
         else if (score < 0) { score -= 1; reasons.push("Vol Spike"); }
+    }
+
+    // --- NEW: MOMENTUM BREAKOUT (CAPTURE PUMPS) ---
+    // Trigger: Price breaks Upper BB + High ADX + Uptrend
+    if (currentPrice > bb.upper && adx > 25 && trendPrimary === 'UP') {
+        score += 2;
+        reasons.push("Momentum Breakout (Price > Upper BB)");
     }
 
     // 7. TREND GUARD (The "Don't Fight the Fed" Rule)
