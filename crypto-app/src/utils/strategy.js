@@ -253,7 +253,7 @@ const calculateSentiment = (news, symbol, coinName) => {
 
 // --- HELPER: TRENDING STRATEGY (ADX > 25) ---
 const generateTrendingSignal = (context) => {
-    const { currentPrice, bb, rsi, macd, adx, trendPrimary, trendHigher, volumeAnalysis, patterns, sentimentScore, params, timeframeLabel, higherTimeframeLabel } = context;
+    const { currentPrice, bb, rsi, macd, adx, trendPrimary, trendHigher, volumeAnalysis, patterns, sentimentScore, params, timeframeLabel, higherTimeframeLabel, volatilityRatio } = context;
 
     let score = 0;
     let reasons = [];
@@ -267,14 +267,24 @@ const generateTrendingSignal = (context) => {
         else { score += 1; reasons.push(`Trend Conflict (${higherTimeframeLabel} Down, ${timeframeLabel} Up)`); }
     }
 
-    // 2. Momentum Breakout (Capture Pumps)
+    // 2. Momentum Breakout (Capture Pumps) WITH FALSE BREAKOUT FILTER
     if (currentPrice > bb.upper && trendPrimary === 'UP') {
-        score += 2;
-        reasons.push("Momentum Breakout (Price > Upper BB)");
+        // Volume Confirmation: Must be > 1.5x average or a Spike
+        if (volumeAnalysis.isSpike || volumeAnalysis.ratio > 1.5) {
+            score += 2;
+            reasons.push("Momentum Breakout (Price > Upper BB + Vol)");
+        } else {
+            reasons.push("Ignored Breakout (Weak Volume)");
+        }
     }
     if (currentPrice < bb.lower && trendPrimary === 'DOWN') {
-        score -= 2;
-        reasons.push("Momentum Breakout (Price < Lower BB)");
+        // Volume Confirmation
+        if (volumeAnalysis.isSpike || volumeAnalysis.ratio > 1.5) {
+            score -= 2;
+            reasons.push("Momentum Breakout (Price < Lower BB + Vol)");
+        } else {
+            reasons.push("Ignored Breakout (Weak Volume)");
+        }
     }
 
     // 3. RSI (Trend Mode - Ignore Overbought in Strong Trend)
@@ -388,6 +398,9 @@ export const generateSignal = (currentPrice, klinesPrimary, klinesTrend = [], pa
     const volumeAnalysis = calculateVolumeAnalysis(klinesPrimary);
     const patterns = detectPatterns(klinesPrimary);
 
+    // Volatility Ratio (ATR / Price)
+    const volatilityRatio = atr / currentPrice;
+
     // Sentiment Analysis
     let sentimentScore = 0;
     let sentimentReason = "";
@@ -429,7 +442,7 @@ export const generateSignal = (currentPrice, klinesPrimary, klinesTrend = [], pa
 
     // --- REGIME DETECTION & SIGNAL GENERATION ---
     const context = {
-        currentPrice, bb, rsi, macd, adx, atr, trendPrimary, trendHigher, volumeAnalysis, patterns, sentimentScore, params, timeframeLabel, higherTimeframeLabel
+        currentPrice, bb, rsi, macd, adx, atr, trendPrimary, trendHigher, volumeAnalysis, patterns, sentimentScore, params, timeframeLabel, higherTimeframeLabel, volatilityRatio
     };
 
     let result;
@@ -445,6 +458,15 @@ export const generateSignal = (currentPrice, klinesPrimary, klinesTrend = [], pa
 
     const { score, reasons, type } = result;
 
+    // Smart Volatility Adaptation: Increase Threshold in High Volatility
+    let threshold = 3;
+    let volStatus = "Normal";
+
+    if (volatilityRatio > 0.02) { // > 2% movement per candle
+        threshold = 4;
+        volStatus = "High Vol (Strict)";
+    }
+
     // Common Output Structure
     let signal = {
         type: type,
@@ -452,11 +474,20 @@ export const generateSignal = (currentPrice, klinesPrimary, klinesTrend = [], pa
         tp: 0, sl: 0, leverage: 1,
         reason: `[${strategyMode}] ${reasons.join(', ')}`,
         score: score,
-        indicators: { rsi, macd, bb, volume: volumeAnalysis, trend: trendPrimary, adx, atr, trendHigher, patterns, sentiment: sentimentScore }
+        indicators: { rsi, macd, bb, volume: volumeAnalysis, trend: trendPrimary, adx, atr, trendHigher, patterns, sentiment: sentimentScore, volatilityRatio }
     };
 
+    // Override type based on new Threshold
+    if (Math.abs(score) < threshold) {
+        signal.type = 'NEUTRAL';
+        signal.reason += ` | Below Threshold ${threshold} (${volStatus})`;
+    } else {
+        // Restore original type if it passed threshold
+        signal.type = score > 0 ? 'LONG' : 'SHORT';
+    }
+
     // Calculate TP/SL/Leverage if Signal is Active
-    if (type !== 'NEUTRAL') {
+    if (signal.type !== 'NEUTRAL') {
         // Dynamic Leverage
         const calculateLeverage = (s) => {
             const absScore = Math.abs(s);
@@ -480,7 +511,7 @@ export const generateSignal = (currentPrice, klinesPrimary, klinesTrend = [], pa
             signal.tp3 = result.tp;
         } else {
             // Standard Trend Following TP/SL
-            if (type === 'LONG') {
+            if (signal.type === 'LONG') {
                 signal.tp = currentPrice + tp2Dist;
                 signal.tp1 = currentPrice + (slDist * 1.0);
                 signal.tp2 = currentPrice + tp2Dist;
@@ -495,7 +526,7 @@ export const generateSignal = (currentPrice, klinesPrimary, klinesTrend = [], pa
             }
         }
         signal.leverage = leverage;
-        signal.reason = `${type} (${strategyMode}) Lev x${leverage}: ${reasons.join(', ')}`;
+        signal.reason = `${signal.type} (${strategyMode}) Lev x${leverage}: ${reasons.join(', ')} | ${volStatus}`;
     }
 
     return signal;
