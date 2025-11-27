@@ -1,6 +1,42 @@
 
 import { generateSignal } from './strategy';
 
+// Helper: Aggregate 1H klines to 4H
+const aggregateKlines = (klines1h, timeframeH = 4) => {
+    const klines4h = [];
+    let current4h = null;
+
+    for (let i = 0; i < klines1h.length; i++) {
+        const k = klines1h[i];
+        const date = new Date(k.time);
+
+        // Check if this candle starts a new 4H block (00:00, 04:00, 08:00, etc.)
+        // Assuming data is 1H and continuous. A simpler way is grouping by 4.
+        // But checking hours is safer for real timestamps.
+        const isNewBlock = date.getHours() % timeframeH === 0;
+
+        if (isNewBlock || !current4h) {
+            if (current4h) klines4h.push(current4h); // Push finished candle
+            current4h = {
+                time: k.time,
+                open: k.open,
+                high: k.high,
+                low: k.low,
+                close: k.close,
+                volume: k.volume
+            };
+        } else {
+            // Update current 4H candle
+            current4h.high = Math.max(current4h.high, k.high);
+            current4h.low = Math.min(current4h.low, k.low);
+            current4h.close = k.close;
+            current4h.volume += k.volume;
+        }
+    }
+    if (current4h) klines4h.push(current4h); // Push last candle
+    return klines4h;
+};
+
 // Simulate trading on historical data
 export const runBacktest = (klines, params, symbol) => {
     let balance = 10000; // Initial capital
@@ -9,12 +45,20 @@ export const runBacktest = (klines, params, symbol) => {
     let maxDrawdown = 0;
     let peakBalance = 10000;
 
+    // Pre-calculate 4H Trend Data
+    const klines4h = aggregateKlines(klines, 4);
+
     // We need enough data for indicators (e.g., 200 EMA)
     const START_INDEX = 200;
 
     for (let i = START_INDEX; i < klines.length; i++) {
-        const currentPrice = klines[i].close;
+        const currentKline = klines[i];
+        const currentPrice = currentKline.close;
         const currentKlines = klines.slice(0, i + 1);
+
+        // Filter 4H klines that have CLOSED before this current time
+        // This prevents "looking into the future"
+        const currentTrendKlines = klines4h.filter(k => k.time < currentKline.time);
 
         // 1. Check Active Trade
         if (activeTrade) {
@@ -59,11 +103,20 @@ export const runBacktest = (klines, params, symbol) => {
 
         // 2. Look for New Trade (if no active trade)
         if (!activeTrade) {
-            // Mock Trend Klines (just use same timeframe for simplicity in backtest or fetch if possible)
-            // For speed, we'll assume trend alignment is neutral or use same klines
-            const signal = generateSignal(currentPrice, currentKlines, currentKlines, params, [], null, '1H', symbol);
+            // Pass BOTH Primary (1H) and Trend (4H) data
+            const signal = generateSignal(
+                currentPrice,
+                currentKlines,
+                currentTrendKlines,
+                params,
+                [],
+                null,
+                '1H',
+                symbol
+            );
 
-            if (Math.abs(signal.score) >= 4 && (signal.type === 'LONG' || signal.type === 'SHORT')) {
+            // Use Score >= 3 to match Live Bot (was 4)
+            if (Math.abs(signal.score) >= 3 && (signal.type === 'LONG' || signal.type === 'SHORT')) {
                 activeTrade = {
                     type: signal.type,
                     entry: currentPrice,
