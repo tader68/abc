@@ -251,6 +251,126 @@ const calculateSentiment = (news, symbol, coinName) => {
     return Math.max(-2, Math.min(2, sentimentScore / 5)); // Divide by 5 to keep within range
 };
 
+// --- HELPER: TRENDING STRATEGY (ADX > 25) ---
+const generateTrendingSignal = (context) => {
+    const { currentPrice, bb, rsi, macd, adx, trendPrimary, trendHigher, volumeAnalysis, patterns, sentimentScore, params, timeframeLabel, higherTimeframeLabel } = context;
+
+    let score = 0;
+    let reasons = [];
+
+    // 1. Multi-Timeframe Trend Filter (The "King")
+    if (trendHigher.includes('UP')) {
+        if (trendPrimary === 'UP') { score += 2; reasons.push(`MTF Alignment (${higherTimeframeLabel}+${timeframeLabel} Bull)`); }
+        else { score -= 1; reasons.push(`Trend Conflict (${higherTimeframeLabel} Up, ${timeframeLabel} Down)`); }
+    } else if (trendHigher.includes('DOWN')) {
+        if (trendPrimary === 'DOWN') { score -= 2; reasons.push(`MTF Alignment (${higherTimeframeLabel}+${timeframeLabel} Bear)`); }
+        else { score += 1; reasons.push(`Trend Conflict (${higherTimeframeLabel} Down, ${timeframeLabel} Up)`); }
+    }
+
+    // 2. Momentum Breakout (Capture Pumps)
+    if (currentPrice > bb.upper && trendPrimary === 'UP') {
+        score += 2;
+        reasons.push("Momentum Breakout (Price > Upper BB)");
+    }
+    if (currentPrice < bb.lower && trendPrimary === 'DOWN') {
+        score -= 2;
+        reasons.push("Momentum Breakout (Price < Lower BB)");
+    }
+
+    // 3. RSI (Trend Mode - Ignore Overbought in Strong Trend)
+    if (rsi < params.rsiLower) { score += 1; reasons.push(`RSI Oversold (<${params.rsiLower})`); }
+
+    if (rsi > params.rsiUpper) {
+        if (trendHigher === 'STRONG_UP') {
+            score += 0.5; // Bullish in strong trend
+            reasons.push(`RSI High (Strong Trend)`);
+        } else {
+            score -= 1;
+            reasons.push(`RSI Overbought (>${params.rsiUpper})`);
+        }
+    }
+
+    // 4. MACD
+    if (macd.histogram > 0 && macd.macd > macd.signal) { score += 1; reasons.push("MACD Bull"); }
+    if (macd.histogram < 0 && macd.macd < macd.signal) { score -= 1; reasons.push("MACD Bear"); }
+
+    // 5. Volume
+    if (volumeAnalysis.isSpike) {
+        if (score > 0) { score += 1; reasons.push("Vol Spike"); }
+        else if (score < 0) { score -= 1; reasons.push("Vol Spike"); }
+    }
+
+    // 6. Price Action
+    if (patterns.includes('Bullish Engulfing') || patterns.includes('Hammer/Pinbar')) {
+        score += 1.5; reasons.push(`Pattern: ${patterns.join(', ')}`);
+    }
+    if (patterns.includes('Bearish Engulfing') || patterns.includes('Shooting Star')) {
+        score -= 1.5; reasons.push(`Pattern: ${patterns.join(', ')}`);
+    }
+
+    // 7. Sentiment
+    if (sentimentScore !== 0) {
+        score += sentimentScore * 0.5;
+        reasons.push(`Sentiment (${sentimentScore > 0 ? '+' : ''}${sentimentScore.toFixed(1)})`);
+    }
+
+    // 8. TREND GUARD (Strict)
+    if (trendHigher === 'STRONG_UP' && score < 0) {
+        score = 0; reasons.push("Trend Guard: Blocked Short (Strong Uptrend)");
+    }
+    if (trendHigher === 'STRONG_DOWN' && score > 0) {
+        score = 0; reasons.push("Trend Guard: Blocked Long (Strong Downtrend)");
+    }
+
+    return { score, reasons, type: score >= 3 ? 'LONG' : (score <= -3 ? 'SHORT' : 'NEUTRAL') };
+};
+
+// --- HELPER: RANGING STRATEGY (ADX <= 25) ---
+const generateRangingSignal = (context) => {
+    const { currentPrice, bb, rsi, macd, adx, trendHigher, volumeAnalysis, sentimentScore, params, atr } = context;
+
+    let score = 0;
+    let reasons = [];
+    let type = 'NEUTRAL';
+    let tp = 0, sl = 0;
+
+    const slDistMR = atr * 1.5; // Tighter SL for mean reversion
+
+    // 1. Mean Reversion Logic (BB Bounce)
+    // LONG: Lower BB + RSI Oversold
+    if (currentPrice <= bb.lower && rsi < 30) {
+        // GUARD: Don't Long if Higher Timeframe is STRONG DOWN
+        if (trendHigher !== 'STRONG_DOWN') {
+            score = 3;
+            type = 'LONG';
+            reasons.push(`Mean Reversion: Lower BB Bounce (RSI ${rsi.toFixed(1)})`);
+            tp = bb.middle;
+            sl = currentPrice - slDistMR;
+        } else {
+            reasons.push("Blocked: Strong Downtrend");
+        }
+    }
+
+    // SHORT: Upper BB + RSI Overbought
+    else if (currentPrice >= bb.upper && rsi > 70) {
+        // GUARD: Don't Short if Higher Timeframe is STRONG UP
+        if (trendHigher !== 'STRONG_UP') {
+            score = -3;
+            type = 'SHORT';
+            reasons.push(`Mean Reversion: Upper BB Bounce (RSI ${rsi.toFixed(1)})`);
+            tp = bb.middle;
+            sl = currentPrice + slDistMR;
+        } else {
+            reasons.push("Blocked: Strong Uptrend");
+        }
+    }
+    else {
+        reasons.push(`Sideway (ADX ${adx.toFixed(1)}). Waiting for Setup.`);
+    }
+
+    return { score, reasons, type, tp, sl };
+};
+
 export const generateSignal = (currentPrice, klinesPrimary, klinesTrend = [], params = { rsiLower: 30, rsiUpper: 70, tpMult: 4, slMult: 2 }, news = [], geminiSentiment = null, timeframeLabel = '1H', symbol = '', coinName = '') => {
     // Primary Data Analysis (1H or 15m)
     const closePrices = klinesPrimary.map(k => k.close);
@@ -273,11 +393,9 @@ export const generateSignal = (currentPrice, klinesPrimary, klinesTrend = [], pa
     let sentimentReason = "";
 
     if (geminiSentiment) {
-        // Use Gemini AI (Scale -10..10 to -2..2)
         sentimentScore = geminiSentiment.score / 5;
         sentimentReason = `Gemini AI: ${geminiSentiment.reasoning}`;
     } else {
-        // Fallback to Keyword AI (Context Aware)
         sentimentScore = calculateSentiment(news, symbol, coinName);
         sentimentReason = sentimentScore > 0 ? "News AI: Bullish" : sentimentScore < 0 ? "News AI: Bearish" : "News: Neutral";
         if (Math.abs(sentimentScore) >= 1.5) sentimentReason += " (Strong)";
@@ -295,7 +413,6 @@ export const generateSignal = (currentPrice, klinesPrimary, klinesTrend = [], pa
         ichimokuHigher = calculateIchimoku(klinesTrend);
 
         if (currentPrice > currentEMA200) {
-            // Check Cloud
             if (ichimokuHigher && ichimokuHigher.spanA !== null && ichimokuHigher.spanB !== null && currentPrice > Math.max(ichimokuHigher.spanA, ichimokuHigher.spanB)) {
                 trendHigher = 'STRONG_UP';
             } else {
@@ -310,194 +427,75 @@ export const generateSignal = (currentPrice, klinesPrimary, klinesTrend = [], pa
         }
     }
 
-    let score = 0;
-    let reasons = [];
+    // --- REGIME DETECTION & SIGNAL GENERATION ---
+    const context = {
+        currentPrice, bb, rsi, macd, adx, atr, trendPrimary, trendHigher, volumeAnalysis, patterns, sentimentScore, params, timeframeLabel, higherTimeframeLabel
+    };
 
-    // 0. Sentiment Impact (New AI Layer)
-    if (sentimentScore !== 0) {
-        score += sentimentScore * 0.5; // Max +1 or -1
-        reasons.push(`${sentimentReason} (${sentimentScore > 0 ? '+' : ''}${sentimentScore.toFixed(1)})`);
+    let result;
+    let strategyMode = "";
+
+    if (adx > 25) {
+        strategyMode = "TRENDING";
+        result = generateTrendingSignal(context);
+    } else {
+        strategyMode = "RANGING";
+        result = generateRangingSignal(context);
     }
 
-    // --- NEW: MEAN REVERSION STRATEGY (SIDEWAY MARKET) ---
-    // Trigger if Trend Strength (ADX) is weak (< 25)
-    if (adx < 25) {
-        const slDistMR = atr * 1.5; // Tighter SL for mean reversion
+    const { score, reasons, type } = result;
 
-        // LONG SETUP: Price touches Lower Band + RSI Oversold
-        // GUARD: Don't Long if Higher Timeframe is STRONG DOWN
-        if (currentPrice <= bb.lower && rsi < 30 && trendHigher !== 'STRONG_DOWN') {
-            return {
-                type: 'LONG',
-                entry: currentPrice,
-                tp: bb.middle, // Target is Mean (Middle Band)
-                tp1: currentPrice + (bb.middle - currentPrice) * 0.5,
-                tp2: bb.middle,
-                tp3: bb.upper, // Moonshot target
-                sl: currentPrice - slDistMR,
-                leverage: 5, // Lower leverage for counter-trend
-                reason: `Mean Reversion: Lower BB Bounce (RSI ${rsi.toFixed(1)})`,
-                score: 3, // Moderate score
-                indicators: { rsi, macd, bb, volume: volumeAnalysis, trend: trendPrimary, adx, atr, trendHigher, patterns, sentiment: sentimentScore }
-            };
-        }
-
-        // SHORT SETUP: Price touches Upper Band + RSI Overbought
-        // GUARD: Don't Short if Higher Timeframe is STRONG UP
-        if (currentPrice >= bb.upper && rsi > 70 && trendHigher !== 'STRONG_UP') {
-            return {
-                type: 'SHORT',
-                entry: currentPrice,
-                tp: bb.middle, // Target is Mean (Middle Band)
-                tp1: currentPrice - (currentPrice - bb.middle) * 0.5,
-                tp2: bb.middle,
-                tp3: bb.lower, // Moonshot target
-                sl: currentPrice + slDistMR,
-                leverage: 5, // Lower leverage for counter-trend
-                reason: `Mean Reversion: Upper BB Bounce (RSI ${rsi.toFixed(1)})`,
-                score: -3, // Moderate score
-                indicators: { rsi, macd, bb, volume: volumeAnalysis, trend: trendPrimary, adx, atr, trendHigher, patterns, sentiment: sentimentScore }
-            };
-        }
-
-        // If Sideway but no setup, return NEUTRAL immediately (Don't force Trend Following)
-        return {
-            type: 'NEUTRAL',
-            entry: currentPrice,
-            tp: 0, sl: 0, leverage: 1,
-            reason: `Sideway Market (ADX ${adx.toFixed(1)}). Waiting for BB Bounce.`,
-            indicators: { rsi, macd, bb, volume: volumeAnalysis, trend: trendPrimary, adx, atr, trendHigher, sentiment: sentimentScore }
-        };
-    }
-
-    // --- EXISTING: TREND FOLLOWING STRATEGY (ADX >= 25) ---
-
-    // 1. Multi-Timeframe Trend Filter (The "King")
-    if (trendHigher.includes('UP')) {
-        if (trendPrimary === 'UP') { score += 2; reasons.push(`MTF Alignment (${higherTimeframeLabel}+${timeframeLabel} Bull)`); }
-        else { score -= 1; reasons.push(`Trend Conflict (${higherTimeframeLabel} Up, ${timeframeLabel} Down)`); }
-    } else if (trendHigher.includes('DOWN')) {
-        if (trendPrimary === 'DOWN') { score -= 2; reasons.push(`MTF Alignment (${higherTimeframeLabel}+${timeframeLabel} Bear)`); }
-        else { score += 1; reasons.push(`Trend Conflict (${higherTimeframeLabel} Down, ${timeframeLabel} Up)`); }
-    }
-
-    // 2. ADX Filter (Handled by Regime Detection above)
-    // if (adx < 20) { ... } -> Removed to allow Mean Reversion
-
-    // 3. Price Action Triggers
-    if (patterns.includes('Bullish Engulfing') || patterns.includes('Hammer/Pinbar')) {
-        score += 1.5; reasons.push(`Pattern: ${patterns.join(', ')}`);
-    }
-    if (patterns.includes('Bearish Engulfing') || patterns.includes('Shooting Star')) {
-        score -= 1.5; reasons.push(`Pattern: ${patterns.join(', ')}`);
-    }
-
-    // 4. Ichimoku Cloud (Higher Timeframe) Support/Resist
-    if (ichimokuHigher && ichimokuHigher.spanA !== null && ichimokuHigher.spanB !== null) {
-        if (currentPrice > ichimokuHigher.spanA && currentPrice > ichimokuHigher.spanB) {
-            score += 1; reasons.push(`Above ${higherTimeframeLabel} Cloud`);
-        } else if (currentPrice < ichimokuHigher.spanA && currentPrice < ichimokuHigher.spanB) {
-            score -= 1; reasons.push(`Below ${higherTimeframeLabel} Cloud`);
-        }
-    }
-
-    // 5. RSI & MACD (Momentum)
-    if (rsi < params.rsiLower) { score += 1; reasons.push(`RSI Oversold (<${params.rsiLower})`); }
-
-    // MODIFIED: Relax RSI Overbought penalty in Strong Uptrend
-    if (rsi > params.rsiUpper) {
-        if (trendHigher === 'STRONG_UP') {
-            score += 0.5; // Actually bullish in a strong trend!
-            reasons.push(`RSI High (Strong Trend)`);
-        } else {
-            score -= 1;
-            reasons.push(`RSI Overbought (>${params.rsiUpper})`);
-        }
-    }
-
-    if (macd.histogram > 0 && macd.macd > macd.signal) { score += 1; reasons.push("MACD Bull"); }
-    if (macd.histogram < 0 && macd.macd < macd.signal) { score -= 1; reasons.push("MACD Bear"); }
-
-    // 6. Volume
-    if (volumeAnalysis.isSpike) {
-        if (score > 0) { score += 1; reasons.push("Vol Spike"); }
-        else if (score < 0) { score -= 1; reasons.push("Vol Spike"); }
-    }
-
-    // --- NEW: MOMENTUM BREAKOUT (CAPTURE PUMPS) ---
-    // Trigger: Price breaks Upper BB + High ADX + Uptrend
-    if (currentPrice > bb.upper && adx > 25 && trendPrimary === 'UP') {
-        score += 2;
-        reasons.push("Momentum Breakout (Price > Upper BB)");
-    }
-
-    // 7. TREND GUARD (The "Don't Fight the Fed" Rule)
-    // Prevent Shorting in Strong Uptrend and Longing in Strong Downtrend
-    if (trendHigher === 'STRONG_UP' && score < 0) {
-        score = 0;
-        reasons.push("Trend Guard: Blocked Short (Strong Uptrend)");
-    }
-    if (trendHigher === 'STRONG_DOWN' && score > 0) {
-        score = 0;
-        reasons.push("Trend Guard: Blocked Long (Strong Downtrend)");
-    }
-
-    // Thresholds
+    // Common Output Structure
     let signal = {
-        type: 'NEUTRAL',
+        type: type,
         entry: currentPrice,
         tp: 0, sl: 0, leverage: 1,
-        reason: "Waiting for Institutional Setup...",
+        reason: `[${strategyMode}] ${reasons.join(', ')}`,
+        score: score,
         indicators: { rsi, macd, bb, volume: volumeAnalysis, trend: trendPrimary, adx, atr, trendHigher, patterns, sentiment: sentimentScore }
     };
 
-    // Dynamic Leverage Calculation
-    const calculateLeverage = (score) => {
-        const absScore = Math.abs(score);
-        if (absScore >= 7) return 40; // Extremely Strong
-        if (absScore >= 5) return 20; // Very Strong
-        if (absScore >= 4) return 10; // Strong
-        return 5; // Moderate
-    };
-
-    const leverage = calculateLeverage(score);
-
-    // Dynamic SL/TP (Multi-Level)
-    const slDist = atr * params.slMult; // SL is usually 1.5x ATR
-
-    // TP Levels based on Risk:Reward (1:1, 1:2, 1:3) - More realistic for day trading
-    const tp1Dist = slDist * 1.0;
-    const tp2Dist = slDist * 2.0;
-    const tp3Dist = slDist * 3.0;
-
-    if (score >= 3) {
-        signal = {
-            type: 'LONG',
-            entry: currentPrice,
-            tp: currentPrice + tp2Dist, // Main target is TP2 (1:2 R:R)
-            tp1: currentPrice + tp1Dist,
-            tp2: currentPrice + tp2Dist,
-            tp3: currentPrice + tp3Dist,
-            sl: currentPrice - slDist,
-            leverage: leverage,
-            reason: `BUY SIGNAL (Lev x${leverage}): ${reasons.join(', ')}`,
-            score: score,
-            indicators: { rsi, macd, bb, volume: volumeAnalysis, trend: trendPrimary, adx, atr, trendHigher, patterns, sentiment: sentimentScore }
+    // Calculate TP/SL/Leverage if Signal is Active
+    if (type !== 'NEUTRAL') {
+        // Dynamic Leverage
+        const calculateLeverage = (s) => {
+            const absScore = Math.abs(s);
+            if (absScore >= 7) return 40;
+            if (absScore >= 5) return 20;
+            if (absScore >= 4) return 10;
+            return 5;
         };
-    } else if (score <= -3) {
-        signal = {
-            type: 'SHORT',
-            entry: currentPrice,
-            tp: currentPrice - tp2Dist, // Main target is TP2 (1:2 R:R)
-            tp1: currentPrice - tp1Dist,
-            tp2: currentPrice - tp2Dist,
-            tp3: currentPrice - tp3Dist,
-            sl: currentPrice + slDist,
-            leverage: leverage,
-            reason: `SELL SIGNAL (Lev x${leverage}): ${reasons.join(', ')}`,
-            score: score,
-            indicators: { rsi, macd, bb, volume: volumeAnalysis, trend: trendPrimary, adx, atr, trendHigher, patterns, sentiment: sentimentScore }
-        };
+        const leverage = calculateLeverage(score);
+
+        // TP/SL Calculation
+        const slDist = atr * params.slMult;
+        const tp2Dist = slDist * 2.0;
+
+        // If Ranging Strategy provided specific TP/SL, use them. Otherwise calculate standard.
+        if (result.tp && result.sl) {
+            signal.tp = result.tp;
+            signal.sl = result.sl;
+            signal.tp1 = result.tp; // Simplified for ranging
+            signal.tp2 = result.tp;
+            signal.tp3 = result.tp;
+        } else {
+            // Standard Trend Following TP/SL
+            if (type === 'LONG') {
+                signal.tp = currentPrice + tp2Dist;
+                signal.tp1 = currentPrice + (slDist * 1.0);
+                signal.tp2 = currentPrice + tp2Dist;
+                signal.tp3 = currentPrice + (slDist * 3.0);
+                signal.sl = currentPrice - slDist;
+            } else {
+                signal.tp = currentPrice - tp2Dist;
+                signal.tp1 = currentPrice - (slDist * 1.0);
+                signal.tp2 = currentPrice - tp2Dist;
+                signal.tp3 = currentPrice - (slDist * 3.0);
+                signal.sl = currentPrice + slDist;
+            }
+        }
+        signal.leverage = leverage;
+        signal.reason = `${type} (${strategyMode}) Lev x${leverage}: ${reasons.join(', ')}`;
     }
 
     return signal;
