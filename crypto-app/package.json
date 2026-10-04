@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "research": "node research/run.js",
+    "research:test": "node --test research/lib.test.js"
   },
   "dependencies": {
     "lightweight-charts": "^5.0.9",
