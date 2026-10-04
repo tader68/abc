@@ -12,6 +12,8 @@ npm run research                                   # bản cũ: chỉ so 8 họ 
 npm run research:test                              # unit test
 ```
 
+Nếu máy chủ ở vùng bị Binance chặn (HTTP 451), công cụ tự chuyển sang nguồn chính thức khác của Binance: `data-api.binance.vision` cho spot và kho dữ liệu `data.binance.vision` cho futures. File tải về được lưu đệm trong `research/.cache/`. Nếu chạy sau proxy HTTPS, thêm `NODE_USE_ENV_PROXY=1` (Node ≥ 22.21).
+
 ## `discover` làm gì
 
 1. **Thư viện khoảng 200 chỉ báo** (`features.js`). Bao gồm:

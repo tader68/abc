@@ -26,3 +26,4 @@ dist-ssr
 # research output
 research-results.json
 discover-results.json
+research/.cache/
