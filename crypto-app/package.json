@@ -8,8 +8,9 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
+    "discover": "node research/discover.js",
     "research": "node research/run.js",
-    "research:test": "node --test research/lib.test.js"
+    "research:test": "node --test research/*.test.js"
   },
   "dependencies": {
     "lightweight-charts": "^5.0.9",

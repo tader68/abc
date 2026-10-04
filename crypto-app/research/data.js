@@ -26,11 +26,13 @@ export const fetchSeries = async (market, symbol, interval, bars) => {
     l: kept.map((r) => +r[3]),
     c: kept.map((r) => +r[4]),
     v: kept.map((r) => +r[5]),
+    nt: kept.map((r) => +r[8]), // number of trades
+    tb: kept.map((r) => +r[9]), // taker-buy base volume
   };
 };
 
 // mulberry32 PRNG
-const rng = (seed) => () => {
+export const rng = (seed) => () => {
   seed |= 0;
   seed = (seed + 0x6d2b79f5) | 0;
   let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
@@ -38,23 +40,35 @@ const rng = (seed) => () => {
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 };
 
-// Geometric random walk, no edge by construction (used to sanity-check that the
-// pipeline reports "no edge" on noise, and to run tests without network access).
-export const syntheticSeries = (symbol, bars, seed, drift = 0) => {
+// Geometric random walk. By default there is no edge (used to check the pipeline reports
+// "no edge" on noise). `plant` injects a known edge to check the pipeline can find one:
+//   ar   - return autocorrelation (momentum if >0, mean-reversion if <0)
+//   flow - how strongly last bar's taker-buy ratio predicts the next return
+export const syntheticSeries = (symbol, bars, seed, drift = 0, plant = {}) => {
   const rand = rng(seed);
   const gauss = () => Math.sqrt(-2 * Math.log(rand() || 1e-12)) * Math.cos(2 * Math.PI * rand());
-  const s = { symbol, t: [], o: [], h: [], l: [], c: [], v: [] };
+  const { ar = 0, flow = 0 } = plant;
+  const s = { symbol, t: [], o: [], h: [], l: [], c: [], v: [], nt: [], tb: [] };
   let price = 100;
+  let prevR = 0;
+  let prevTbr = 0.5;
   for (let i = 0; i < bars; i++) {
     const o = price;
-    const c = o * Math.exp(drift + 0.008 * gauss());
-    s.t.push(Date.UTC(2024, 0, 1) + i * 3600_000);
+    const r = drift + ar * prevR + flow * (prevTbr - 0.5) + 0.008 * gauss();
+    const c = o * Math.exp(r);
+    const vol = 1000 * Math.exp(0.3 * gauss());
+    const tbr = Math.min(0.9, Math.max(0.1, 0.5 + 0.08 * gauss()));
+    s.t.push(Date.UTC(2022, 0, 1) + i * 4 * 3600_000);
     s.o.push(o);
     s.c.push(c);
     s.h.push(Math.max(o, c) * (1 + 0.003 * rand()));
     s.l.push(Math.min(o, c) * (1 - 0.003 * rand()));
-    s.v.push(1000);
+    s.v.push(vol);
+    s.tb.push(vol * tbr);
+    s.nt.push(Math.round(vol / 2));
     price = c;
+    prevR = r;
+    prevTbr = tbr;
   }
   return s;
 };
