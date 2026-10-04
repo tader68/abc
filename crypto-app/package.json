@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "discover": "node research/discover.js",
+    "rotation": "node research/rotation.js",
     "research": "node research/run.js",
     "research:test": "node --test research/*.test.js"
   },

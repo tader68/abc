@@ -353,7 +353,7 @@ export const runBacktest = (s, sig, atrArr, exits, market, from, to, curve = nul
 
   const close = (price, i) => {
     const px = price * (1 - pos.dir * m.slippage);
-    const pnl = (pos.dir * (px - pos.entry)) / pos.entry * pos.notional - pos.notional * m.fee * 2;
+    const pnl = (pos.dir * (px - pos.entry)) / pos.entry * pos.notional - pos.notional * m.fee * 2 - pos.funding;
     equity += pnl;
     trades++;
     if (tradesOut) tradesOut.push(pnl / pos.eq0);
@@ -382,11 +382,15 @@ export const runBacktest = (s, sig, atrArr, exits, market, from, to, curve = nul
         notional,
         dist,
         eq0: equity,
+        funding: 0,
         extreme: entry,
         sl: entry - dir * dist,
         tp: exits.tpMult > 0 ? entry + dir * exits.tpMult * atrArr[i - 1] : null,
       };
     }
+
+    // funding: longs pay a positive rate, shorts receive it (futures only)
+    if (pos && m.allowShort && s.fund && Number.isFinite(s.fund[i])) pos.funding += pos.dir * s.fund[i] * pos.notional;
 
     if (pos) {
       // trailing stop follows the extreme of PREVIOUS bars only
@@ -400,7 +404,7 @@ export const runBacktest = (s, sig, atrArr, exits, market, from, to, curve = nul
       if (pos) pos.extreme = pos.dir === 1 ? Math.max(pos.extreme, s.h[i]) : Math.min(pos.extreme, s.l[i]);
     }
 
-    const mtm = pos ? equity + (pos.dir * (s.c[i] - pos.entry)) / pos.entry * pos.notional : equity;
+    const mtm = pos ? equity + (pos.dir * (s.c[i] - pos.entry)) / pos.entry * pos.notional - pos.funding : equity;
     if (curve) curve[i] = mtm;
     if (mtm > peak) peak = mtm;
     maxDD = Math.max(maxDD, (peak - mtm) / peak);

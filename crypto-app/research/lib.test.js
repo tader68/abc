@@ -50,3 +50,18 @@ test('signal on the last bar cannot be traded (no look-ahead)', () => {
   sig[s.c.length - 1] = 1;
   assert.equal(runBacktest(s, sig, a, { slMult: 1, tpMult: 0 }, 'futures', 0, s.c.length).trades, 0);
 });
+
+test('futures longs pay positive funding, shorts receive it; spot ignores it', () => {
+  const run = (dir, market) => {
+    const { s, sig, a } = setup();
+    s.fund = new Array(s.c.length).fill(0.001);
+    sig[WARMUP + 1] = dir;
+    return runBacktest(s, sig, a, { slMult: 1, tpMult: 0 }, market, 0, s.c.length).ret;
+  };
+  const { s, sig, a } = setup();
+  sig[WARMUP + 1] = 1;
+  const base = runBacktest(s, sig, a, { slMult: 1, tpMult: 0 }, 'futures', 0, s.c.length).ret;
+  assert.ok(run(1, 'futures') < base);
+  assert.ok(run(-1, 'futures') > base);
+  assert.ok(Math.abs(run(1, 'spot') - runBacktest(s, sig, a, { slMult: 1, tpMult: 0 }, 'spot', 0, s.c.length).ret) < 1e-12);
+});

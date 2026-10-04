@@ -443,6 +443,39 @@ export const buildFeatureSeries = (s, ctx = {}) => {
     }
   }
 
+  // derivatives: funding, open interest, long/short positioning (futures archive)
+  const has = (k) => Array.isArray(s[k]) && s[k].length === n && s[k].some(Number.isFinite);
+  if (has('fundRate')) {
+    const fr = s.fundRate;
+    add('fundRate', fr.slice());
+    for (const p of [6, 18, 42]) add(`fundMean${p}`, sma(fr, p));
+    add('fundZ90', zscore(fr, 90));
+    add('fundChg6', diff(fr, 6));
+  }
+  if (has('oi')) {
+    const loi = s.oi.map((x) => (x > 0 ? Math.log(x) : NaN));
+    for (const k of [1, 3, 6, 12, 42]) {
+      const d = diff(loi, k);
+      add(`oiChg${k}`, d);
+      const pr = logRet(c, k);
+      add(`oiPriceDiv${k}`, each(n, k, (i) => d[i] - pr[i]));
+    }
+    add('oiZ50', zscore(loi, 50));
+    add('oiZ200', zscore(loi, 200));
+    if (has('oiv')) {
+      const qv = rollSum(c.map((x, i) => x * v[i]), 6);
+      add('oiToVolume', each(n, 0, (i) => s.oiv[i] / qv[i]));
+    }
+  }
+  for (const key of ['lsTopAcc', 'lsTopPos', 'lsAll', 'takerLS']) {
+    if (!has(key)) continue;
+    const x = s[key].map((a) => (a > 0 ? Math.log(a) : NaN));
+    add(`${key}`, x);
+    add(`${key}Z50`, zscore(x, 50));
+    add(`${key}Chg6`, diff(x, 6));
+  }
+  if (has('lsTopPos') && has('lsAll')) add('smartVsCrowd', each(n, 0, (i) => Math.log(s.lsTopPos[i] / s.lsAll[i])));
+
   // cross-asset: BTC regime and relative strength
   if (ctx.btc) {
     const bc = ctx.btc.c;
@@ -495,3 +528,16 @@ export const buildFeatureSeries = (s, ctx = {}) => {
 };
 
 export const rankSeries = (series) => series.map(({ id, series: x }) => ({ id, rank: rollingRank(x) }));
+
+// Same feature list for every coin (a coin missing a data source gets "unknown" ranks for it),
+// so feature index k means the same indicator on every symbol.
+export const featureMatrix = (seriesList, btc) => {
+  const per = seriesList.map((s) => buildFeatureSeries(s, { btc }));
+  const names = [...new Set(per.flatMap((F) => F.map((f) => f.id)))];
+  const ranks = per.map((F, si) => {
+    const byId = new Map(F.map((f) => [f.id, f.series]));
+    const n = seriesList[si].c.length;
+    return names.map((id) => (byId.has(id) ? rollingRank(byId.get(id)) : new Uint8Array(n).fill(NA)));
+  });
+  return { names, ranks };
+};

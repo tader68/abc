@@ -1,36 +1,28 @@
 #!/usr/bin/env node
 // Strategy discovery on Binance spot / futures:
-//   1. ~200-indicator library + formulas evolved by genetic programming (new indicators)
+//   1. ~240-indicator library (price, volume, order flow, funding / open interest / long-short) + formulas evolved by genetic programming (new indicators)
 //   2. evolutionary search over rules combining indicators, plus classic strategy grids
 //   3. funnel: train -> validation -> ONE look at an untouched hold-out period
 //
 //   node research/discover.js [--market spot|futures|both] [--interval 4h] [--bars 8000]
 //        [--symbols BTCUSDT,ETHUSDT,...] [--islands 3] [--pop 240] [--gens 14] [--finalists 10]
-//        [--seed 1] [--out file.json] [--force-signals] [--synthetic [--plant-ar 0.08] [--plant-flow 0.3]]
+//        [--seed 1] [--out file.json] [--force-signals] [--no-derivs] [--synthetic [--plant-ar 0.08] [--plant-flow 0.3]]
 import { writeFileSync } from 'node:fs';
 import { STRATEGIES, EXIT_GRID, MARKETS, WARMUP, atr, buyAndHold } from './lib.js';
-import { fetchSeries, syntheticSeries, rng } from './data.js';
-import { buildFeatureSeries, rankSeries, rollingRank } from './features.js';
+import { rng } from './data.js';
+import { featureMatrix, rollingRank } from './features.js';
+import { parseArgs, DEFAULT_UNIVERSE, loadMarket } from './common.js';
 import { makeGpContext, evolveIndicators, indicatorSeries } from './gp.js';
 import { evalSigs, evolveRules, ruleSignals, describeRule } from './search.js';
 import { portfolioEquity, periodStats, tStat } from './stats.js';
 
-const args = Object.fromEntries(
-  process.argv
-    .slice(2)
-    .join(' ')
-    .split(/--/)
-    .filter(Boolean)
-    .map((a) => {
-      const [k, ...rest] = a.trim().split(/\s+/);
-      return [k, rest.join(' ') || true];
-    }),
-);
+const args = parseArgs(process.argv.slice(2));
 const opt = {
   market: args.market || 'both',
   interval: args.interval || '4h',
   bars: +args.bars || 8000,
-  symbols: (args.symbols || 'BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,LINKUSDT,AVAXUSDT,LTCUSDT,TRXUSDT,DOTUSDT').split(','),
+  symbols: args.symbols ? args.symbols.split(',') : DEFAULT_UNIVERSE,
+  noDerivs: !!args['no-derivs'],
   islands: +args.islands || 3,
   pop: +args.pop || 240,
   gens: +args.gens || 14,
@@ -38,7 +30,7 @@ const opt = {
   seed: +args.seed || 1,
   out: args.out || 'discover-results.json',
   synthetic: !!args.synthetic,
-  plant: { ar: +args['plant-ar'] || 0, flow: +args['plant-flow'] || 0 },
+  plant: { ar: +args['plant-ar'] || 0, flow: +args['plant-flow'] || 0, trend: +args['plant-trend'] || 0 },
   forceSignals: !!args['force-signals'],
 };
 const T_MIN = 2.5; // per-trade t-statistic needed on the hold-out (10 finalists tested -> stricter than 1.96)
@@ -47,28 +39,12 @@ const log = (m) => console.log(m);
 const f = (x, d = 1) => (Number.isFinite(x) ? x.toFixed(d) : '∞');
 const day = (t) => new Date(t).toISOString().slice(0, 10);
 
-const loadAll = async (market) => {
-  if (opt.synthetic) return opt.symbols.map((sym, i) => syntheticSeries(sym, opt.bars, opt.seed * 1000 + i, 0, opt.plant));
-  const out = [];
-  for (const sym of opt.symbols) {
-    try {
-      out.push(await fetchSeries(market, sym, opt.interval, opt.bars));
-    } catch (e) {
-      console.warn(`  bỏ qua ${sym}: ${e.message}`);
-    }
-  }
-  return out;
-};
-
-const trimTo = (s, n) => Object.fromEntries(Object.entries(s).map(([k, v]) => [k, Array.isArray(v) ? v.slice(-n) : v]));
-
 const analyse = async (market) => {
   const t0 = Date.now();
   log(`\n${'='.repeat(70)}\n${market.toUpperCase()}  (phí ${MARKETS[market].fee * 100}%/chiều, ${MARKETS[market].allowShort ? 'Long+Short' : 'chỉ Long'}, đòn bẩy tối đa ${MARKETS[market].maxLeverage}x)\n${'='.repeat(70)}`);
-  const raw = await loadAll(market);
-  if (raw.length < 3) throw new Error('Cần dữ liệu ít nhất 3 coin');
-  const n = Math.min(...raw.map((s) => s.c.length));
-  const series = raw.map((s) => trimTo(s, n));
+  const series = await loadMarket(opt, market, log);
+  if (series.length < 3) throw new Error('Cần dữ liệu ít nhất 3 coin');
+  const n = series[0].c.length;
   const names0 = series.map((s) => s.symbol);
   const btc = series.find((s) => s.symbol === 'BTCUSDT') || null;
   const atrs = series.map((s) => atr(s, 14));
@@ -87,21 +63,14 @@ const analyse = async (market) => {
 
   // 1. indicator library
   log('\n[1/4] Dựng thư viện chỉ báo...');
-  const featureNames = [];
-  const ranksBySymbol = series.map(() => []);
-  series.forEach((s, si) => {
-    const R = rankSeries(buildFeatureSeries(s, { btc }));
-    R.forEach((r) => {
-      if (si === 0) featureNames.push(r.id);
-      ranksBySymbol[si].push(r.rank);
-    });
-  });
-  log(`  ${featureNames.length} chỉ báo có sẵn`);
+  const { names: featureNames, ranks: ranksBySymbol } = featureMatrix(series, btc);
+  const nDeriv = featureNames.filter((x) => /^(fund|oi|ls|taker|smart)/.test(x)).length;
+  log(`  ${featureNames.length} chỉ báo có sẵn (trong đó ${nDeriv} từ dữ liệu phái sinh: funding, open interest, long/short)`);
 
   // 2. genetic programming: invent new indicators
   log('\n[2/4] Tự tạo chỉ báo mới bằng genetic programming (chỉ dùng train + validation)...');
   const rand = rng(opt.seed * 7919 + (market === 'spot' ? 1 : 2));
-  const gpCtx = makeGpContext(series);
+  const gpCtx = makeGpContext(series.slice(0, 12)); // fitness on the 12 most liquid coins keeps GP fast
   const evolved = evolveIndicators(gpCtx, { rand, from: WARMUP, trainEnd: tv, valEnd: hs, population: 160, generations: 10, keep: 12 });
   evolved.forEach((e, k) => {
     series.forEach((s, si) => ranksBySymbol[si].push(rollingRank(indicatorSeries(e.expr, s))));
@@ -244,4 +213,4 @@ const results = [];
 for (const m of markets) results.push(await analyse(m));
 writeFileSync(opt.out, JSON.stringify({ generatedAt: new Date().toISOString(), options: opt, results }, null, 2));
 log(`\nĐã lưu: ${opt.out}`);
-log('Lưu ý: backtest không đảm bảo lợi nhuận tương lai; chưa tính funding futures. Luôn đặt stop-loss, bắt đầu bằng vốn nhỏ.');
+log('Lưu ý: backtest đã tính phí, trượt giá và funding (futures) nhưng không đảm bảo lợi nhuận tương lai. Luôn đặt stop-loss, bắt đầu bằng vốn nhỏ.');

@@ -54,7 +54,7 @@ export const periodStats = (times, eq) => {
     peak = Math.max(peak, e);
     maxDD = Math.max(maxDD, (peak - e) / peak);
   }
-  return { weekly: summarise(weeks), monthly: summarise(months), maxDD: maxDD * 100, total: (eq[eq.length - 1] - 1) * 100, months };
+  return { weekly: summarise(weeks), monthly: summarise(months), maxDD: maxDD * 100, total: (eq[eq.length - 1] - 1) * 100, weeks, months };
 };
 
 // t-statistic of the mean per-trade return (1 = equity risked per trade scale)

@@ -3,7 +3,9 @@
 Công cụ CLI chạy bằng Node ≥ 18, không cần cài thêm thư viện. Bot **chỉ đưa ra tín hiệu**, bạn tự vào lệnh thủ công trên Binance. Bot không dùng API key và không đặt lệnh.
 
 ```bash
-npm run discover                                   # tìm kiếm đầy đủ: spot + futures, 12 coin, nến 4h, 8000 nến
+npm run discover                                   # tìm luật vào/ra lệnh: spot + futures, 40 coin, nến 4h, 8000 nến
+npm run rotation                                   # tìm chiến lược xoay vòng coin (xếp hạng định kỳ)
+npm run discover -- --no-derivs                    # bỏ dữ liệu phái sinh (tải nhanh hơn)
 npm run discover -- --market futures --interval 1h --bars 15000
 npm run discover -- --islands 6 --pop 400 --gens 25  # tìm sâu hơn (chậm hơn)
 npm run discover -- --synthetic                    # dữ liệu ngẫu nhiên: phải ra "không đạt"
@@ -16,13 +18,14 @@ Nếu máy chủ ở vùng bị Binance chặn (HTTP 451), công cụ tự chuy�
 
 ## `discover` làm gì
 
-1. **Thư viện khoảng 200 chỉ báo** (`features.js`). Bao gồm:
+1. **Thư viện khoảng 240 chỉ báo** (`features.js`). Bao gồm:
    - Momentum/returns nhiều khung; khoảng cách tới EMA, SMA, WMA, HMA; độ dốc và R² của hồi quy tuyến tính.
    - ADX, DI, Aroon, Vortex, Efficiency Ratio, Choppiness, Ichimoku.
    - RSI 2–28, Stoch, StochRSI, CCI, CMO, MACD (4 bộ tham số), TRIX, AO, DPO.
    - ATR%, tỷ lệ ATR, Bollinger %B và độ rộng, Keltner, vị trí trong kênh Donchian, realized/Parkinson vol, skew, hình dạng nến, chuỗi nến tăng/giảm.
    - Volume z-score, OBV, CMF, MFI, VWAP lệch, Force Index.
    - **Dòng lệnh taker buy/sell** (cumulative delta, số lệnh, kích thước lệnh trung bình), lấy từ dữ liệu klines của Binance.
+   - **Dữ liệu phái sinh futures**: funding rate (mức, trung bình, z-score), open interest (thay đổi, phân kỳ với giá, so với volume), tỷ lệ long/short của top trader và toàn thị trường, tỷ lệ taker long/short. Nguồn là kho `data.binance.vision`.
    - **Liên thị trường**: chế độ BTC, sức mạnh tương đối so với BTC, tương quan với BTC.
 
    Mỗi chỉ báo được quy về **phần trăm thứ hạng trượt** (so với 300 nến gần nhất), nên một ngưỡng như "top 10%" tự thích nghi với từng coin và từng giai đoạn.
@@ -36,6 +39,15 @@ Nếu máy chủ ở vùng bị Binance chặn (HTTP 451), công cụ tự chuy�
    Một ứng viên chỉ "ĐẠT" khi trên hold-out nó vừa lãi, vừa có t-stat lợi nhuận mỗi lệnh ≥ 2.5, vừa có ít nhất 50% số coin lãi.
 5. **Báo cáo** lợi nhuận và MaxDD trên hold-out, so với giữ coin, kèm **% tuần lãi, % tháng lãi, tháng tệ nhất và chuỗi tuần lỗ dài nhất**. Nếu có ứng viên đạt, công cụ in **tín hiệu hiện tại** (Entry, SL, TP, khối lượng theo rủi ro 1% vốn). Toàn bộ kết quả được lưu vào `discover-results.json`.
 
+## `rotation`: chiến lược xoay vòng coin
+
+Cứ mỗi R ngày (1, 3 hoặc 7), công cụ xếp hạng toàn bộ coin theo một chỉ báo rồi chọn danh mục:
+
+- **Spot:** giữ K coin đứng đầu (K = 3, 5 hoặc 8). Có tuỳ chọn chỉ giữ coin khi BTC nằm trên EMA100.
+- **Futures:** chỉ Long, hoặc Long nhóm đầu kết hợp Short nhóm cuối (trung lập với thị trường).
+
+Công cụ thử mọi chỉ báo trong thư viện theo cả hai chiều, cộng các cặp kết hợp từ 20 chỉ báo tốt nhất. Tổng cộng hơn 10.000 cấu hình, và tất cả đều đi qua cùng phễu train → validation → hold-out. Điểm khác là phép kiểm định trên hold-out dùng t-stat của lợi nhuận theo tuần, với ngưỡng ≥ 2.5. Kết quả có tính phí giao dịch theo vòng quay danh mục và funding. Nếu có cấu hình đạt, công cụ in **danh mục hiện tại** (coin nào Long, coin nào Short, tỷ trọng bao nhiêu).
+
 ## Vì sao phải khắt khe như vậy
 
 Thử hàng nghìn luật thì chắc chắn sẽ có luật trông rất đẹp trên dữ liệu quá khứ chỉ nhờ may mắn. Phễu train → validation → hold-out cùng ngưỡng t-stat là để lọc bỏ chúng. Công cụ đã được kiểm chứng theo hai chiều:
@@ -45,5 +57,6 @@ Thử hàng nghìn luật thì chắc chắn sẽ có luật trông rất đẹp
 
 ## Giới hạn
 
-- Chưa tính funding rate của futures. Engine giả định khớp lệnh ở giá mở nến kế tiếp, có phí và trượt giá cố định.
+- Engine giả định khớp lệnh ở giá mở nến kế tiếp, có phí, trượt giá cố định và funding. Funding của tháng hiện tại chưa có trong kho dữ liệu, nên được ước tính bằng mức funding gần nhất.
+- Chiến lược xoay vòng giữ tỷ trọng cố định giữa hai lần rebalance (một phép xấp xỉ).
 - Kết quả phụ thuộc giai đoạn dữ liệu. Hãy chạy lại định kỳ (ví dụ mỗi tháng) và thử với vốn nhỏ trước khi tin vào bất kỳ kết quả nào.

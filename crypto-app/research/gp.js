@@ -25,6 +25,11 @@ export const terminals = (s) => {
   t.hl = mk((i) => Math.log(s.h[i] / s.l[i]));
   if (Array.isArray(s.tb)) t.tbr = mk((i) => s.tb[i] / (s.v[i] || NaN) - 0.5);
   if (Array.isArray(s.nt)) t.lnt = mk((i) => Math.log(s.nt[i] + 1));
+  const ok = (k) => Array.isArray(s[k]) && s[k].some(Number.isFinite);
+  if (ok('fundRate')) t.fr = mk((i) => s.fundRate[i] * 1e4);
+  if (ok('oi')) t.doi = mk((i) => Math.log(s.oi[i] / s.oi[i - 1]), 1);
+  if (ok('lsAll')) t.ls = mk((i) => Math.log(s.lsAll[i]));
+  if (ok('lsTopPos')) t.lstop = mk((i) => Math.log(s.lsTopPos[i]));
   return t;
 };
 
@@ -215,12 +220,15 @@ const scoreExpr = (expr, ctx, from, to) => {
   return { ic: total / count, consistency: same / count };
 };
 
-export const makeGpContext = (seriesList) => ({
-  T: seriesList.map(terminals),
-  memos: seriesList.map(() => new Map()),
-  fwd: seriesList.map((s) => Object.fromEntries(HORIZONS.map((h) => [h, forwardReturns(s.c, h)]))),
-  names: Object.keys(terminals(seriesList[0])),
-});
+export const makeGpContext = (seriesList) => {
+  const T = seriesList.map(terminals);
+  return {
+    T,
+    memos: seriesList.map(() => new Map()),
+    fwd: seriesList.map((s) => Object.fromEntries(HORIZONS.map((h) => [h, forwardReturns(s.c, h)]))),
+    names: Object.keys(T[0]).filter((k) => T.every((x) => x[k] && x[k].some(Number.isFinite))),
+  };
+};
 
 // Evolve for `generations`, return the best distinct formulas by training fitness.
 // Selection uses only [from, trainEnd); [trainEnd, valEnd) is used to drop formulas whose
@@ -234,6 +242,7 @@ export const evolveIndicators = (ctx, { rand, from, trainEnd, valEnd, population
   let pop = Array.from({ length: population }, () => randomTree(rand, ctx.names, 4));
   const seen = new Map();
   for (let g = 0; g < generations; g++) {
+    ctx.memos.forEach((m) => m.clear()); // bound memory: cache sub-expressions within a generation only
     const scored = pop.map((e) => {
       const key = show(e);
       if (!seen.has(key)) seen.set(key, { expr: e, fit: fit(e) });
@@ -251,6 +260,7 @@ export const evolveIndicators = (ctx, { rand, from, trainEnd, valEnd, population
     }
     pop = next;
   }
+  ctx.memos.forEach((m) => m.clear());
   const ranked = [...seen.values()].filter((x) => x.fit > 0).sort((a, b) => b.fit - a.fit).slice(0, keep * 3);
   const out = [];
   for (const { expr, fit: f } of ranked) {

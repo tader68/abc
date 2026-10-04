@@ -123,6 +123,169 @@ export const fetchSeries = async (market, symbol, interval, bars) => {
   return toSeries(symbol, await fetchFuturesArchive(symbol, interval, bars));
 };
 
+// ---------- derivatives: funding rate, open interest, long/short ratios (futures archive) ----------
+const pool = async (items, limit, fn) => {
+  const out = new Array(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const k = next++;
+        out[k] = await fn(items[k], k);
+      }
+    }),
+  );
+  return out;
+};
+
+const monthsBetween = (fromMs, toMs) => {
+  const out = [];
+  const d = new Date(fromMs);
+  let y = d.getUTCFullYear();
+  let m = d.getUTCMonth();
+  const end = new Date(toMs);
+  while (y < end.getUTCFullYear() || (y === end.getUTCFullYear() && m <= end.getUTCMonth())) {
+    out.push(`${y}-${String(m + 1).padStart(2, '0')}`);
+    m++;
+    if (m === 12) {
+      m = 0;
+      y++;
+    }
+  }
+  return out;
+};
+
+const csvRows = (csv) => (csv ? csv.split('\n').map((l) => l.trim().split(',')).filter((r) => /^\d/.test(r[0])) : []);
+
+// [[calcTimeMs, rate, intervalHours], ...]
+export const fetchFunding = async (symbol, fromMs) => {
+  const current = new Date().toISOString().slice(0, 7);
+  const months = monthsBetween(fromMs, Date.now()).filter((m) => m !== current);
+  const csvs = await pool(months, 8, (ym) => archiveFile(`monthly/fundingRate/${symbol}/${symbol}-fundingRate-${ym}.zip`, true));
+  return csvs.flatMap(csvRows).map((r) => [+r[0], +r[2], +r[1]]).sort((a, b) => a[0] - b[0]);
+};
+
+// [[timeMs, openInterest, oiValue, topAccLS, topPosLS, globalLS, takerLS], ...] — snapshots at minute 55
+// of every hour (conservative: always known before the hourly candle closes).
+export const fetchMetrics = async (symbol, fromMs, onProgress = () => {}) => {
+  const now = new Date();
+  const current = now.toISOString().slice(0, 7);
+  const out = [];
+  for (const ym of monthsBetween(fromMs, now.getTime())) {
+    const cache = new URL(`metrics_${symbol}_${ym}.json`, CACHE_DIR);
+    if (ym !== current && existsSync(cache)) {
+      out.push(...JSON.parse(readFileSync(cache, 'utf8')));
+      continue;
+    }
+    const [y, m] = ym.split('-').map(Number);
+    const days = [];
+    for (let d = 1; d <= 31; d++) {
+      const day = new Date(Date.UTC(y, m - 1, d));
+      if (day.getUTCMonth() !== m - 1 || day >= new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))) break;
+      days.push(day.toISOString().slice(0, 10));
+    }
+    const csvs = await pool(days, 32, (ymd) => archiveFile(`daily/metrics/${symbol}/${symbol}-metrics-${ymd}.zip`, false).catch(() => null));
+    const rows = [];
+    for (const csv of csvs) {
+      if (!csv) continue;
+      for (const line of csv.split('\n')) {
+        const r = line.trim().split(',');
+        if (r.length < 8 || !/^\d{4}-/.test(r[0]) || r[0].slice(14, 16) !== '55') continue;
+        rows.push([Date.parse(r[0].replace(' ', 'T') + 'Z'), +r[2], +r[3], +r[4], +r[5], +r[6], +r[7]]);
+      }
+    }
+    rows.sort((a, b) => a[0] - b[0]);
+    if (ym !== current) {
+      mkdirSync(CACHE_DIR, { recursive: true });
+      writeFileSync(cache, JSON.stringify(rows));
+    }
+    out.push(...rows);
+    onProgress(ym);
+  }
+  return out;
+};
+
+// Adds per-bar derivative series to s (aligned on candle close; never uses later data):
+//   fund      sum of funding rates charged during the bar (futures P&L)
+//   fundRate  latest known funding rate
+//   oi, oiv, lsTopAcc, lsTopPos, lsAll, takerLS
+export const attachDerivatives = (s, funding, metrics, barMs) => {
+  const n = s.t.length;
+  const nan = () => new Array(n).fill(NaN);
+  s.fund = new Array(n).fill(0);
+  s.fundRate = nan();
+  let k = 0;
+  let last = null;
+  for (let i = 0; i < n; i++) {
+    const open = s.t[i];
+    const close = open + barMs - 1;
+    while (k < funding.length && funding[k][0] < open) last = funding[k++];
+    while (k < funding.length && funding[k][0] <= close) {
+      s.fund[i] += funding[k][1];
+      last = funding[k++];
+    }
+    // after the archive ends (current month) assume the last known rate keeps being charged
+    if (k >= funding.length && last && open > last[0]) {
+      const step = (last[2] || 8) * 3_600_000;
+      const first = last[0] + Math.ceil((open - last[0]) / step) * step;
+      for (let ft = first; ft <= close; ft += step) s.fund[i] += last[1];
+    }
+    if (last) s.fundRate[i] = last[1];
+  }
+  const keys = ['oi', 'oiv', 'lsTopAcc', 'lsTopPos', 'lsAll', 'takerLS'];
+  keys.forEach((key) => (s[key] = nan()));
+  let j = 0;
+  for (let i = 0; i < n; i++) {
+    const close = s.t[i] + barMs - 1;
+    while (j + 1 < metrics.length && metrics[j + 1][0] <= close) j++;
+    const row = metrics[j];
+    if (!row || row[0] > close || close - row[0] > 86_400_000) continue;
+    keys.forEach((key, q) => (s[key][i] = row[q + 1] || NaN));
+  }
+  return s;
+};
+
+// Download, align on common timestamps, drop coins without enough history, attach derivatives.
+export const loadUniverse = async ({ market, symbols, interval, bars, derivs = true, log = console.log }) => {
+  const raw = [];
+  for (const sym of symbols) {
+    try {
+      raw.push(await fetchSeries(market, sym, interval, bars));
+    } catch (e) {
+      log(`  bỏ qua ${sym}: ${e.message.slice(0, 120)}`);
+    }
+  }
+  const need = Math.floor(bars * 0.97) - 2;
+  const short = raw.filter((s) => s.t.length < need).map((s) => s.symbol);
+  if (short.length) log(`  bỏ ${short.length} coin chưa đủ lịch sử: ${short.join(', ')}`);
+  let list = raw.filter((s) => s.t.length >= need);
+  const common = list.reduce((acc, s) => {
+    const set = new Set(s.t);
+    return acc ? acc.filter((x) => set.has(x)) : s.t.slice();
+  }, null) || [];
+  const keep = new Set(common);
+  list = list.map((s) => {
+    const idx = s.t.map((x, i) => (keep.has(x) ? i : -1)).filter((i) => i >= 0);
+    return Object.fromEntries(Object.entries(s).map(([k, v]) => [k, Array.isArray(v) ? idx.map((i) => v[i]) : v]));
+  });
+  if (derivs && list.length) {
+    const barMs = intervalMs(interval);
+    const from = list[0].t[0];
+    let done = 0;
+    for (const s of list) {
+      try {
+        const [f, m] = await Promise.all([fetchFunding(s.symbol, from), fetchMetrics(s.symbol, from)]);
+        attachDerivatives(s, f, m, barMs);
+      } catch (e) {
+        log(`  ${s.symbol}: không lấy được dữ liệu phái sinh (${e.message.slice(0, 80)})`);
+      }
+      done++;
+      if (done % 5 === 0 || done === list.length) log(`  dữ liệu phái sinh: ${done}/${list.length} coin`);
+    }
+  }
+  return list;
+};
+
 // mulberry32 PRNG
 export const rng = (seed) => () => {
   seed |= 0;
@@ -136,17 +299,22 @@ export const rng = (seed) => () => {
 // "no edge" on noise). `plant` injects a known edge to check the pipeline can find one:
 //   ar   - return autocorrelation (momentum if >0, mean-reversion if <0)
 //   flow - how strongly last bar's taker-buy ratio predicts the next return
+//   trend - volatility of a slowly drifting expected return (multi-week momentum)
 export const syntheticSeries = (symbol, bars, seed, drift = 0, plant = {}) => {
   const rand = rng(seed);
   const gauss = () => Math.sqrt(-2 * Math.log(rand() || 1e-12)) * Math.cos(2 * Math.PI * rand());
-  const { ar = 0, flow = 0 } = plant;
-  const s = { symbol, t: [], o: [], h: [], l: [], c: [], v: [], nt: [], tb: [] };
+  const { ar = 0, flow = 0, trend = 0 } = plant;
+  let mu = 0;
+  const s = { symbol, t: [], o: [], h: [], l: [], c: [], v: [], nt: [], tb: [], fund: [], fundRate: [], oi: [], oiv: [], lsTopAcc: [], lsTopPos: [], lsAll: [], takerLS: [] };
+  let oi = 1e6;
+  let rate = 0.0001;
   let price = 100;
   let prevR = 0;
   let prevTbr = 0.5;
   for (let i = 0; i < bars; i++) {
     const o = price;
-    const r = drift + ar * prevR + flow * (prevTbr - 0.5) + 0.008 * gauss();
+    mu = 0.998 * mu + trend * gauss();
+    const r = drift + mu + ar * prevR + flow * (prevTbr - 0.5) + 0.008 * gauss();
     const c = o * Math.exp(r);
     const vol = 1000 * Math.exp(0.3 * gauss());
     const tbr = Math.min(0.9, Math.max(0.1, 0.5 + 0.08 * gauss()));
@@ -158,6 +326,16 @@ export const syntheticSeries = (symbol, bars, seed, drift = 0, plant = {}) => {
     s.v.push(vol);
     s.tb.push(vol * tbr);
     s.nt.push(Math.round(vol / 2));
+    rate = 0.9 * rate + 0.1 * 0.0001 + 0.00005 * gauss();
+    oi *= Math.exp(0.01 * gauss());
+    s.fundRate.push(rate);
+    s.fund.push(i % 2 === 0 ? rate : 0);
+    s.oi.push(oi);
+    s.oiv.push(oi * c);
+    s.lsTopAcc.push(Math.exp(0.2 * gauss()));
+    s.lsTopPos.push(Math.exp(0.2 * gauss()));
+    s.lsAll.push(Math.exp(0.2 * gauss()));
+    s.takerLS.push(Math.exp(0.2 * gauss()));
     price = c;
     prevR = r;
     prevTbr = tbr;
