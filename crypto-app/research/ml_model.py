@@ -24,6 +24,7 @@ ap.add_argument('--horizon', type=int, default=6, help='prediction horizon in ba
 ap.add_argument('--train-months', type=int, default=12, help='minimum history before the first prediction')
 ap.add_argument('--placebo', action='store_true', help='shuffle the targets: results must collapse to chance')
 ap.add_argument('--out', default='ml-results.json')
+ap.add_argument('--macro', action='store_true', help='add macro / event / attention features from <dir>/macro.npz')
 ap.add_argument('--trade-symbols', default='', help='comma list: only these coins may be traded in sections 4c-4e')
 ap.add_argument('--leaves', type=int, default=31)
 ap.add_argument('--lr', type=float, default=0.03)
@@ -61,6 +62,12 @@ for nm in cs_names:
     cs.append(r)
 X = np.concatenate([X, np.stack(cs, axis=2)], axis=2)
 all_names = names + [f'cs_{x}' for x in cs_names]
+if args.macro:
+    mz = np.load(D / 'macro.npz')
+    Mmac = mz['M'].astype(np.float32)  # [bar, feature], same for every coin
+    X = np.concatenate([X, np.broadcast_to(Mmac[None, :, :], (C, n, Mmac.shape[1]))], axis=2)
+    all_names += [f'macro_{x}' for x in mz['names']]
+    print(f'+ {Mmac.shape[1]} chỉ báo vĩ mô / sự kiện / mức độ quan tâm')
 F2 = len(all_names)
 
 # targets: return from the next bar's open over H bars (decision at the close of bar i)

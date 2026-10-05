@@ -22,6 +22,7 @@ ap.add_argument('--dir', default=str(Path(__file__).parent / '.cache/ml/panel_4h
 ap.add_argument('--pred', required=True)
 ap.add_argument('--out', default='ml-improve-results.json')
 ap.add_argument('--only', help='evaluate one variant: thr,H,tp,sl,need,uni (e.g. 0.25,12,0.04,0,0.06,20)')
+ap.add_argument('--context', action='store_true', help='with --only: split trades by macro context (needs macro.npz)')
 ap.add_argument('--size', type=float, default=0.1, help='fraction of equity per position')
 args = ap.parse_args()
 
@@ -45,11 +46,16 @@ for k in range(6, n):
 drop24 = CL / hi6 - 1
 
 
+trade_bars = []
+_last_trades = []
+
+
 def run(thr, H, tp, sl, need_drop, universe, from_t, to_t):
     tradable = np.array([s in universe for s in syms])
     eq, peak, mdd = 1.0, 1.0, 0.0
     open_pos = {}  # coin -> dict(entry, exit_bar, size)
     trades = []
+    trade_bars.clear()
     curve = []
     for i in range(1, n - 1):
         if t[i] < from_t or t[i] >= to_t:
@@ -68,6 +74,7 @@ def run(thr, H, tp, sl, need_drop, universe, from_t, to_t):
                 r = px / p['entry'] - 1 - 2 * COST - p['fund']
                 eq += p['size'] * r
                 trades.append(r)
+                trade_bars.append(p['bar'])
                 del open_pos[c]
             else:
                 if np.isfinite(FUND[c, i]):
@@ -80,12 +87,13 @@ def run(thr, H, tp, sl, need_drop, universe, from_t, to_t):
         for c in np.where(ok)[0]:
             if c in open_pos or len(open_pos) >= max(1, int(round(1 / args.size))):
                 continue
-            open_pos[c] = dict(entry=O[c, i + 1] * (1 + 0.0002), exit_bar=i + 1 + H, size=args.size * eq, fund=0.0)
+            open_pos[c] = dict(entry=O[c, i + 1] * (1 + 0.0002), exit_bar=i + 1 + H, size=args.size * eq, fund=0.0, bar=i)
         peak = max(peak, eq)
         mdd = max(mdd, 1 - eq / peak)
         curve.append((t[i], eq))
     yrs = (to_t - from_t) / (365.25 * 86400e3)
     tr = np.array(trades)
+    _last_trades[:] = trades
     tstat = tr.mean() / tr.std() * np.sqrt(len(tr)) if len(tr) > 2 and tr.std() > 0 else 0.0
     return dict(cagr=(eq ** (1 / yrs) - 1) * 100 if eq > 0 else -100, mdd=mdd * 100, n=len(tr), win=(tr > 0).mean() * 100 if len(tr) else 0,
                 mean=tr.mean() * 100 if len(tr) else 0, t=tstat, curve=curve)
@@ -99,6 +107,25 @@ if args.only:
     for name, a, b in [('chọn 2022–2024', start, SPLIT), ('kiểm tra 2025–nay', SPLIT, end + 1)]:
         r = run(float(thr), int(H), float(tp), float(sl), float(need), universe, a, b)
         print(f"{name}: {r['cagr']:6.1f}%/năm · sụt {r['mdd']:4.1f}% · {r['n']} lệnh · thắng {r['win']:.0f}% · TB {r['mean']:.2f}%/lệnh · t={r['t']:.1f}")
+        if args.context:
+            mz = np.load(D / 'macro.npz')
+            M, mn = mz['M'], list(mz['names'])
+            col = lambda k: M[np.array(trade_bars), mn.index(k)]  # noqa: E731
+            tr = np.array(_last_trades)
+            conds = {
+                'chứng khoán Mỹ giảm >3% trong 5 ngày': col('spx_ret5') < -0.03,
+                'VIX > 25 (thị trường truyền thống sợ hãi)': col('vix') > 25,
+                'trong 2 ngày sau khi Fed họp': col('post_fomc_48h') > 0,
+                'cuối tuần (chứng khoán Mỹ đóng cửa)': col('weekend') > 0,
+                'đám đông chú ý cao (lượt xem Wikipedia BTC z>1)': col('wiki_btc_z30') > 1,
+                'đô la mạnh lên >1% trong 5 ngày': col('dxy_ret5') > 0.01,
+            }
+            for label, m in conds.items():
+                m = np.nan_to_num(m.astype(float)) > 0
+                for flag, sel in [('CÓ', m), ('KHÔNG', ~m)]:
+                    x = tr[sel]
+                    if len(x) >= 5:
+                        print(f"      {label} = {flag:5s}: {len(x):4d} lệnh · thắng {(x > 0).mean() * 100:3.0f}% · TB {x.mean() * 100:5.2f}%/lệnh")
     raise SystemExit
 grid = list(itertools.product([0.2, 0.25, 0.3], [6, 12, 18], [0, 0.04, 0.08], [0, 0.08], [0, 0.06], ['12', '20']))
 print(f'Thử {len(grid)} biến thể · CHỌN trên {np.datetime64(int(start), "ms")!s:.10} → 2024-12-31 · KIỂM TRA trên 2025-01-01 → {np.datetime64(int(end), "ms")!s:.10}\n')
