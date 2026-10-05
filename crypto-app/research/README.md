@@ -71,3 +71,4 @@ Thử hàng nghìn luật thì chắc chắn sẽ có luật trông rất đẹp
 | `npm run fundamentals` | Token có phí/doanh thu tăng (theo DefiLlama) có tăng giá tốt hơn không? |
 | `npm run listings` | Coin mới niêm yết trên Binance diễn biến thế nào trong năm đầu? |
 | `npm run shortlistings` | Short coin mới trên futures (có cắt lỗ, funding, cháy tài khoản) có lãi không? Thêm `--slip 0.01` để test với trượt giá 1%. |
+| `npm run ml:export` rồi `npm run ml` | Mô hình LightGBM kết hợp khoảng 240 chỉ báo có dự đoán được hướng giá hoặc xếp hạng coin không? Walk-forward huấn luyện lại hàng tháng, kèm kiểm tra placebo bằng `--placebo`. Cần Python với `pip install lightgbm scipy numpy`. |
