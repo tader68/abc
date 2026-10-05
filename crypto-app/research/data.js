@@ -167,7 +167,7 @@ export const fetchFunding = async (symbol, fromMs) => {
 
 // [[timeMs, openInterest, oiValue, topAccLS, topPosLS, globalLS, takerLS], ...] — snapshots at minute 55
 // of every hour (conservative: always known before the hourly candle closes).
-export const fetchMetrics = async (symbol, fromMs, onProgress = () => {}) => {
+export const fetchMetrics = async (symbol, fromMs, onProgress = () => {}, { cacheOnly = false } = {}) => {
   const now = new Date();
   const current = now.toISOString().slice(0, 7);
   const out = [];
@@ -177,6 +177,7 @@ export const fetchMetrics = async (symbol, fromMs, onProgress = () => {}) => {
       out.push(...JSON.parse(readFileSync(cache, 'utf8')));
       continue;
     }
+    if (cacheOnly) continue; // no download: months not cached stay empty (features become NaN there)
     const [y, m] = ym.split('-').map(Number);
     const days = [];
     for (let d = 1; d <= 31; d++) {
@@ -339,11 +340,11 @@ export const fetchFuturesHistory = async (symbol, interval, fromMs) => {
   for (const r of parts.flat().flatMap(csvRows)) {
     let ts = +r[0];
     if (ts > 1e14) ts = Math.floor(ts / 1000);
-    if (ts >= fromMs) rows.set(ts, [ts, +r[1], +r[2], +r[3], +r[4]]);
+    if (ts >= fromMs) rows.set(ts, [ts, +r[1], +r[2], +r[3], +r[4], +r[5], +r[8], +r[9]]);
   }
   const sorted = [...rows.values()].sort((a, b) => a[0] - b[0]);
   const col = (k) => Float64Array.from(sorted, (r) => r[k]);
-  return { symbol, t: col(0), o: col(1), h: col(2), l: col(3), c: col(4) };
+  return { symbol, t: col(0), o: col(1), h: col(2), l: col(3), c: col(4), v: col(5), nt: col(6), tb: col(7) };
 };
 
 // S3 listing of the data.binance.vision bucket: keys (or common prefixes with a delimiter)

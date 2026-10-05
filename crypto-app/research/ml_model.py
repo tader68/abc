@@ -24,6 +24,9 @@ ap.add_argument('--horizon', type=int, default=6, help='prediction horizon in ba
 ap.add_argument('--train-months', type=int, default=12, help='minimum history before the first prediction')
 ap.add_argument('--placebo', action='store_true', help='shuffle the targets: results must collapse to chance')
 ap.add_argument('--out', default='ml-results.json')
+ap.add_argument('--leaves', type=int, default=31)
+ap.add_argument('--lr', type=float, default=0.03)
+ap.add_argument('--rounds', type=int, default=300)
 ap.add_argument('--only-dir', action='store_true', help='train only the direction model (faster)')
 ap.add_argument('--subsample', type=int, default=1, help='use every k-th bar for training (faster on fine bars)')
 ap.add_argument('--hours-per-bar', type=float, default=4.0)
@@ -81,10 +84,10 @@ months = np.unique(month[first:])
 test_months = months[args.train_months :]
 print(f'Dữ liệu từ {month[first]} · dự đoán ngoài mẫu (walk-forward) từ {test_months[0]} đến {test_months[-1]} ({len(test_months)} tháng)\n')
 
-params_cls = dict(objective='binary', learning_rate=0.03, num_leaves=31, min_data_in_leaf=400, feature_fraction=0.5,
+params_cls = dict(objective='binary', learning_rate=args.lr, num_leaves=args.leaves, min_data_in_leaf=400, feature_fraction=0.5,
                   bagging_fraction=0.7, bagging_freq=1, lambda_l2=10.0, verbose=-1, num_threads=4)
 params_reg = dict(params_cls, objective='regression')
-ROUNDS = 300
+ROUNDS = args.rounds
 
 p_dir = np.full((C, n), np.nan)
 p_rank = np.full((C, n), np.nan)
