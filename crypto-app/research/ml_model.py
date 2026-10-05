@@ -24,6 +24,9 @@ ap.add_argument('--horizon', type=int, default=6, help='prediction horizon in ba
 ap.add_argument('--train-months', type=int, default=12, help='minimum history before the first prediction')
 ap.add_argument('--placebo', action='store_true', help='shuffle the targets: results must collapse to chance')
 ap.add_argument('--out', default='ml-results.json')
+ap.add_argument('--only-dir', action='store_true', help='train only the direction model (faster)')
+ap.add_argument('--subsample', type=int, default=1, help='use every k-th bar for training (faster on fine bars)')
+ap.add_argument('--hours-per-bar', type=float, default=4.0)
 ap.add_argument('--save', help='save out-of-sample predictions to this .npz')
 ap.add_argument('--load', help='skip training and load predictions from this .npz')
 args = ap.parse_args()
@@ -34,7 +37,7 @@ names, syms, n, H = meta['features'], meta['symbols'], meta['n'], args.horizon
 t = np.array(meta['t'], dtype=np.int64)
 F = len(names)
 COST = 0.0005 + 0.0005  # taker fee + slippage per side
-print(f'{len(syms)} coin × {n} nến × {F} chỉ báo · dự đoán {H} nến tới ({H * 4} giờ với nến 4h)')
+print(f'{len(syms)} coin × {n} nến × {F} chỉ báo · dự đoán {H} nến tới ({H * args.hours_per_bar:g} giờ)')
 
 X = np.stack([np.fromfile(D / f'X_{s}.bin', dtype=np.uint8).reshape(n, F) for s in syms]).astype(np.float32)  # [coin, bar, f]
 X[X == 255] = np.nan
@@ -93,18 +96,19 @@ if args.load:
 for m in ([] if args.load else test_months):
     test_idx = np.where(month == m)[0]
     lo = test_idx[0]
-    train_bars = np.arange(first, max(first, lo - H - 1))  # purge: targets must end before the test month
+    train_bars = np.arange(first, max(first, lo - H - 1))[:: args.subsample]  # purge: targets end before the test month
     Xtr = X[:, train_bars, :].reshape(-1, F2)
     ytr = fwd[:, train_bars].reshape(-1)
     etr = ex[:, train_bars].reshape(-1)
     ok = ~np.isnan(ytr)
     m1 = lgb.train(params_cls, lgb.Dataset(Xtr[ok], (ytr[ok] > 0).astype(int)), ROUNDS)
     # ranking target: excess return standardised per bar (robust to volatility regimes)
-    m2 = lgb.train(params_reg, lgb.Dataset(Xtr[ok], np.clip(etr[ok] / (np.nanstd(etr[ok]) + 1e-12), -3, 3)), ROUNDS)
-    imp += m1.feature_importance('gain') + m2.feature_importance('gain')
+    m2 = None if args.only_dir else lgb.train(params_reg, lgb.Dataset(Xtr[ok], np.clip(etr[ok] / (np.nanstd(etr[ok]) + 1e-12), -3, 3)), ROUNDS)
+    imp += m1.feature_importance('gain') + (m2.feature_importance('gain') if m2 else 0)
     Xte = X[:, test_idx, :].reshape(-1, F2)
     p_dir[:, test_idx] = m1.predict(Xte).reshape(C, len(test_idx))
-    p_rank[:, test_idx] = m2.predict(Xte).reshape(C, len(test_idx))
+    if m2:
+        p_rank[:, test_idx] = m2.predict(Xte).reshape(C, len(test_idx))
     print(f'  {m}: huấn luyện trên {ok.sum():,} mẫu · {time.time() - t0:.0f}s', flush=True)
 
 if args.save:
@@ -123,7 +127,7 @@ mask = oos[None, :] & ~np.isnan(fwd) & ~np.isnan(p_dir)
 yy, pp = (fwd[mask] > 0).astype(int), p_dir[mask]
 acc = ((pp > 0.5) == yy).mean()
 conf = np.abs(pp - 0.5) > 0.05
-print(f'\n1) MÔ HÌNH DỰ ĐOÁN HƯỚNG ({H * 4}h tới), ngoài mẫu: {mask.sum():,} dự đoán')
+print(f'\n1) MÔ HÌNH DỰ ĐOÁN HƯỚNG ({H * args.hours_per_bar:g}h tới), ngoài mẫu: {mask.sum():,} dự đoán')
 print(f'   Đúng hướng: {acc * 100:.2f}% (tung đồng xu: 50%; tỷ lệ nến tăng thực tế {yy.mean() * 100:.1f}%) · AUC {auc(pp, yy):.3f}')
 print(f'   Khi mô hình "chắc chắn" (xác suất >55% hoặc <45%): {conf.mean() * 100:.0f}% số lần · đúng {(((pp > 0.5) == yy)[conf]).mean() * 100:.2f}%')
 
@@ -135,7 +139,7 @@ for i in bars_oos[::H]:
     k = ~np.isnan(a) & ~np.isnan(b)
     if k.sum() >= 10:
         ics.append(spearmanr(a[k], b[k])[0])
-ics = np.array(ics)
+ics = np.array(ics) if ics else np.array([0.0])
 print(f'\n2) MÔ HÌNH XẾP HẠNG COIN: tương quan dự đoán ↔ kết quả (IC) trung bình {ics.mean():.4f} · t={ics.mean() / ics.std() * np.sqrt(len(ics)):.2f} · {(ics > 0).mean() * 100:.0f}% số ngày dương')
 
 # ---------- trading ----------
@@ -143,7 +147,7 @@ def stats(rets, label):
     rets = np.array(rets)
     eq = np.cumprod(1 + rets)
     dd = 1 - eq / np.maximum.accumulate(eq)
-    per_year = 365 * 24 / (4 * H)
+    per_year = 365 * 24 / (args.hours_per_bar * H)
     tstat = rets.mean() / rets.std() * np.sqrt(len(rets)) if rets.std() > 0 else 0
     return {'label': label, 'total': (eq[-1] - 1) * 100, 'cagr': (eq[-1] ** (per_year / len(rets)) - 1) * 100, 'maxDD': dd.max() * 100, 't': tstat, 'win': (rets > 0).mean() * 100}
 
@@ -151,7 +155,7 @@ steps = bars_oos[::H]
 steps = steps[steps < n - H - 2]
 step_month = month[steps]
 results = []
-print(f'\n3) GIAO DỊCH THEO MÔ HÌNH (mỗi {H * 4}h, khớp ở giá mở cửa nến sau, phí {COST * 200:.1f}% mỗi lần vào+ra, có funding):')
+print(f'\n3) GIAO DỊCH THEO MÔ HÌNH (mỗi {H * args.hours_per_bar:g}h, khớp ở giá mở cửa nến sau, phí {COST * 200:.1f}% mỗi lần vào+ra, có funding):')
 for tau in [0.0, 0.02, 0.05]:
     prev = np.zeros(C)
     rets = []
@@ -183,7 +187,7 @@ def rank_strategy(K, every, cost, smooth):
         rets.append(r)
     return rets
 
-for K, every, smooth in [(5, 1, 1), (5, 3, 3), (5, 7, 7), (10, 7, 7)]:
+for K, every, smooth in ([] if args.only_dir else [(5, 1, 1), (5, 3, 3), (5, 7, 7), (10, 7, 7)]):
     results.append(stats(rank_strategy(K, every, 0.0, smooth), f'[TRƯỚC PHÍ] long {K} / short {K}, đổi danh mục mỗi {every} ngày'))
     results.append(stats(rank_strategy(K, every, COST, smooth), f'[SAU PHÍ]   long {K} / short {K}, đổi danh mục mỗi {every} ngày'))
 bh = stats([np.nanmean(fwd[:, i]) for i in steps], 'Đối chứng: giữ đều tất cả coin')
@@ -191,7 +195,7 @@ for s in results + [bh]:
     print(f'   • {s["label"]}\n     tổng {s["total"]:7.1f}% · {s["cagr"]:6.1f}%/năm · sụt tối đa {s["maxDD"]:5.1f}% · t-stat {s["t"]:5.2f} · {s["win"]:.0f}% số kỳ lãi')
 
 # ---------- trade only the most confident predictions ----------
-print(f'\n4b) CHỈ GIAO DỊCH KHI MÔ HÌNH TỰ TIN NHẤT (mỗi {H * 4}h chọn N coin có xác suất xa 50% nhất, long nếu >50%, short nếu <50%):')
+print(f'\n4b) CHỈ GIAO DỊCH KHI MÔ HÌNH TỰ TIN NHẤT (mỗi {H * args.hours_per_bar:g}h chọn N coin có xác suất xa 50% nhất, long nếu >50%, short nếu <50%):')
 bins = np.quantile(np.abs(pp - 0.5), [0, 0.5, 0.8, 0.9, 0.95, 0.99, 1])
 for lo, hi in zip(bins[:-1], bins[1:]):
     sel = (np.abs(pp - 0.5) >= lo) & (np.abs(pp - 0.5) <= hi)
