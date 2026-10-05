@@ -20,6 +20,7 @@
     "replicate": "node research/replicate.js",
     "replicate2": "node research/replicate2.js",
     "social": "node research/social.js",
+    "signals": "node research/signals.js",
     "ml:export": "node research/mlexport.js",
     "ml": "python3 research/ml_model.py",
     "research": "node research/run.js",

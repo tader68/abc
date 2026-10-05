@@ -1,0 +1,3 @@
+# Một tín hiệu mỗi dòng: thời gian đăng (giờ VN) | coin | long/short | điểm vào | cắt lỗ | TP1, TP2, TP3
+2026-10-05 21:25 | LINK | short | 14,047 | 14,35 | 13,8349, 13,7440, 13,4410
+2026-10-05 20:30 | BNB | short | 799,49 | 810,83 | 791,5520, 788,1500, 776,8100

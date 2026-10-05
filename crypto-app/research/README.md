@@ -75,3 +75,4 @@ Thử hàng nghìn luật thì chắc chắn sẽ có luật trông rất đẹp
 | `npm run replicate` | Tái hiện các phát hiện đã công bố: BTC theo giờ trong ngày (21–23h UTC), đảo chiều ngắn hạn, hiệu ứng MAX, momentum 1–3 tuần. So sánh giai đoạn của bài báo với các năm sau khi công bố. |
 | `npm run replicate2` | Tái hiện thêm: pairs trading theo đồng tích hợp, BTC dẫn trước altcoin (nến 5 phút), ngày trong tuần, chỉ báo on-chain MVRV (dữ liệu CoinMetrics). |
 | `npm run social` | Các setup phổ biến trên TradingView/YouTube (Triple Supertrend + RSI + EMA200, EMA 20/50/200, RSI + Bollinger scalping) trên BTC/ETH/SOL, có phí. |
+| `npm run signals -- file.txt` | Kiểm tra tín hiệu của một kênh bằng giá thật Binance: lệnh có khớp không, chạm TP hay cắt lỗ trước, tổng thắng/thua sau phí. Định dạng xem `research/signals.example.txt`. |
