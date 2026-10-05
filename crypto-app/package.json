@@ -23,6 +23,7 @@
     "signals": "node research/signals.js",
     "ml:export": "node research/mlexport.js",
     "ml": "python3 research/ml_model.py",
+    "ml:improve": "python3 research/ml_improve.py",
     "research": "node research/run.js",
     "research:test": "node --test research/*.test.js"
   },

@@ -76,3 +76,4 @@ Thử hàng nghìn luật thì chắc chắn sẽ có luật trông rất đẹp
 | `npm run replicate2` | Tái hiện thêm: pairs trading theo đồng tích hợp, BTC dẫn trước altcoin (nến 5 phút), ngày trong tuần, chỉ báo on-chain MVRV (dữ liệu CoinMetrics). |
 | `npm run social` | Các setup phổ biến trên TradingView/YouTube (Triple Supertrend + RSI + EMA200, EMA 20/50/200, RSI + Bollinger scalping) trên BTC/ETH/SOL, có phí. |
 | `npm run signals -- file.txt` | Kiểm tra tín hiệu của một kênh bằng giá thật Binance: lệnh có khớp không, chạm TP hay cắt lỗ trước, tổng thắng/thua sau phí. Định dạng xem `research/signals.example.txt`. |
+| `npm run ml:improve -- --pred file.npz` | Cải tiến chiến lược ML "mua sau bán tháo" với engine theo sự kiện (mỗi 4h, giới hạn vốn mỗi lệnh, TP/SL, điều kiện coin vừa rơi). Chọn trên 2022–2024, kiểm tra một lần trên 2025 → nay. |
