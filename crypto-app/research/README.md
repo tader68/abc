@@ -72,3 +72,4 @@ Thử hàng nghìn luật thì chắc chắn sẽ có luật trông rất đẹp
 | `npm run listings` | Coin mới niêm yết trên Binance diễn biến thế nào trong năm đầu? |
 | `npm run shortlistings` | Short coin mới trên futures (có cắt lỗ, funding, cháy tài khoản) có lãi không? Thêm `--slip 0.01` để test với trượt giá 1%. |
 | `npm run ml:export` rồi `npm run ml` | Mô hình LightGBM kết hợp khoảng 240 chỉ báo có dự đoán được hướng giá hoặc xếp hạng coin không? Walk-forward huấn luyện lại hàng tháng, kèm kiểm tra placebo bằng `--placebo`. Cần Python với `pip install lightgbm scipy numpy`. |
+| `npm run replicate` | Tái hiện các phát hiện đã công bố: BTC theo giờ trong ngày (21–23h UTC), đảo chiều ngắn hạn, hiệu ứng MAX, momentum 1–3 tuần. So sánh giai đoạn của bài báo với các năm sau khi công bố. |

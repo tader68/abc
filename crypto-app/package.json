@@ -17,6 +17,7 @@
     "fundamentals": "node research/fundamentals.js",
     "listings": "node research/listings.js",
     "shortlistings": "node research/shortlistings.js",
+    "replicate": "node research/replicate.js",
     "ml:export": "node research/mlexport.js",
     "ml": "python3 research/ml_model.py",
     "research": "node research/run.js",
