@@ -24,6 +24,8 @@ ap.add_argument('--horizon', type=int, default=6, help='prediction horizon in ba
 ap.add_argument('--train-months', type=int, default=12, help='minimum history before the first prediction')
 ap.add_argument('--placebo', action='store_true', help='shuffle the targets: results must collapse to chance')
 ap.add_argument('--out', default='ml-results.json')
+ap.add_argument('--save', help='save out-of-sample predictions to this .npz')
+ap.add_argument('--load', help='skip training and load predictions from this .npz')
 args = ap.parse_args()
 
 D = Path(args.dir)
@@ -85,7 +87,10 @@ p_dir = np.full((C, n), np.nan)
 p_rank = np.full((C, n), np.nan)
 imp = np.zeros(F2)
 t0 = time.time()
-for m in test_months:
+if args.load:
+    z = np.load(args.load)
+    p_dir, p_rank, imp = z['p_dir'], z['p_rank'], z['imp']
+for m in ([] if args.load else test_months):
     test_idx = np.where(month == m)[0]
     lo = test_idx[0]
     train_bars = np.arange(first, max(first, lo - H - 1))  # purge: targets must end before the test month
@@ -102,6 +107,8 @@ for m in test_months:
     p_rank[:, test_idx] = m2.predict(Xte).reshape(C, len(test_idx))
     print(f'  {m}: huấn luyện trên {ok.sum():,} mẫu · {time.time() - t0:.0f}s', flush=True)
 
+if args.save:
+    np.savez(args.save, p_dir=p_dir, p_rank=p_rank, imp=imp)
 oos = np.isin(month, test_months)
 
 # ---------- prediction quality ----------
@@ -157,21 +164,28 @@ for tau in [0.0, 0.02, 0.05]:
         rets.append(r)
     s = stats(rets, f'Long/short từng coin theo hướng dự đoán (ngưỡng ±{tau * 100:.0f}%)')
     results.append(s)
-for K in [3, 5, 8]:
+def rank_strategy(K, every, cost, smooth):
     rets = []
     prevw = np.zeros(C)
-    for i in steps:
-        a = p_rank[:, i].copy()
-        k = ~np.isnan(a) & ~np.isnan(fwd[:, i])
-        w = np.zeros(C)
-        if k.sum() >= 2 * K:
-            idx = np.where(k)[0][np.argsort(a[k])]
-            w[idx[-K:]] = 0.5 / K
-            w[idx[:K]] = -0.5 / K
-        r = np.nansum(w * fwd[:, i]) - np.nansum(w * fund_fwd[:, i]) - np.abs(w - prevw).sum() * COST
+    w = np.zeros(C)
+    for j, i in enumerate(steps):
+        if j % every == 0:
+            # average the last `smooth` daily predictions to reduce churn
+            a = np.nanmean(p_rank[:, [s for s in steps[max(0, j - smooth + 1) : j + 1]]], axis=1)
+            k = ~np.isnan(a) & ~np.isnan(fwd[:, i])
+            w = np.zeros(C)
+            if k.sum() >= 2 * K:
+                idx = np.where(k)[0][np.argsort(a[k])]
+                w[idx[-K:]] = 0.5 / K
+                w[idx[:K]] = -0.5 / K
+        r = np.nansum(w * fwd[:, i]) - np.nansum(w * fund_fwd[:, i]) - np.abs(w - prevw).sum() * cost
         prevw = w
         rets.append(r)
-    results.append(stats(rets, f'Long {K} coin mạnh nhất + short {K} coin yếu nhất (trung lập thị trường)'))
+    return rets
+
+for K, every, smooth in [(5, 1, 1), (5, 3, 3), (5, 7, 7), (10, 7, 7)]:
+    results.append(stats(rank_strategy(K, every, 0.0, smooth), f'[TRƯỚC PHÍ] long {K} / short {K}, đổi danh mục mỗi {every} ngày'))
+    results.append(stats(rank_strategy(K, every, COST, smooth), f'[SAU PHÍ]   long {K} / short {K}, đổi danh mục mỗi {every} ngày'))
 bh = stats([np.nanmean(fwd[:, i]) for i in steps], 'Đối chứng: giữ đều tất cả coin')
 for s in results + [bh]:
     print(f'   • {s["label"]}\n     tổng {s["total"]:7.1f}% · {s["cagr"]:6.1f}%/năm · sụt tối đa {s["maxDD"]:5.1f}% · t-stat {s["t"]:5.2f} · {s["win"]:.0f}% số kỳ lãi')
