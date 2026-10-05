@@ -60,3 +60,13 @@ Thử hàng nghìn luật thì chắc chắn sẽ có luật trông rất đẹp
 - Engine giả định khớp lệnh ở giá mở nến kế tiếp, có phí, trượt giá cố định và funding. Funding của tháng hiện tại chưa có trong kho dữ liệu, nên được ước tính bằng mức funding gần nhất.
 - Chiến lược xoay vòng giữ tỷ trọng cố định giữa hai lần rebalance (một phép xấp xỉ).
 - Kết quả phụ thuộc giai đoạn dữ liệu. Hãy chạy lại định kỳ (ví dụ mỗi tháng) và thử với vốn nhỏ trước khi tin vào bất kỳ kết quả nào.
+
+## Các nghiên cứu khác
+
+| Lệnh | Câu hỏi |
+|---|---|
+| `npm run dipstudy` / `npm run dipverify` | Mua khi giá rơi có lợi thế không? So với mua ngẫu nhiên, có tính coin đã chết, có kiểm tra khả năng khớp lệnh. |
+| `npm run carry` | Funding carry (mua spot, short futures) lãi bao nhiêu và đều đến mức nào? |
+| `npm run sentiment` | Canh thời điểm theo chỉ số Fear & Greed và dòng tiền stablecoin có thắng được giữ luôn không? |
+| `npm run fundamentals` | Token có phí/doanh thu tăng (theo DefiLlama) có tăng giá tốt hơn không? |
+| `npm run listings` | Coin mới niêm yết trên Binance diễn biến thế nào trong năm đầu? |
