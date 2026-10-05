@@ -47,7 +47,15 @@ for (const sym of SYMBOLS) {
     console.log(`  bỏ ${sym}: chỉ ${s.t.length} nến`);
     continue;
   }
-  const series = { symbol: sym, t: [...s.t], o: [...s.o], h: [...s.h], l: [...s.l], c: [...s.c], v: [...s.v], nt: [...s.nt], tb: [...s.tb] };
+  // keep only candles with real trading: delisted / halted contracts leave flat zero-volume bars in the
+  // archive, which a model would 'predict' perfectly (price does not move) without any tradable value
+  const live = [...s.t.keys()].filter((k) => s.v[k] > 0 && s.h[k] > s.l[k]);
+  const pick = (a) => live.map((k) => a[k]);
+  const series = { symbol: sym, t: pick(s.t), o: pick(s.o), h: pick(s.h), l: pick(s.l), c: pick(s.c), v: pick(s.v), nt: pick(s.nt), tb: pick(s.tb) };
+  if (series.t.length < 600) {
+    console.log(`  bỏ ${sym}: chỉ ${series.t.length} nến có giao dịch`);
+    continue;
+  }
   const [funding, metrics] = await Promise.all([fetchFunding(sym, FROM), fetchMetrics(sym, Date.UTC(2023, 1, 1), () => {}, { cacheOnly: true })]);
   attachDerivatives(series, funding, metrics, BAR);
   const btc = { c: series.t.map((t) => btcClose.get(t) ?? NaN) };
