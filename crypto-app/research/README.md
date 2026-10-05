@@ -70,3 +70,4 @@ Thử hàng nghìn luật thì chắc chắn sẽ có luật trông rất đẹp
 | `npm run sentiment` | Canh thời điểm theo chỉ số Fear & Greed và dòng tiền stablecoin có thắng được giữ luôn không? |
 | `npm run fundamentals` | Token có phí/doanh thu tăng (theo DefiLlama) có tăng giá tốt hơn không? |
 | `npm run listings` | Coin mới niêm yết trên Binance diễn biến thế nào trong năm đầu? |
+| `npm run shortlistings` | Short coin mới trên futures (có cắt lỗ, funding, cháy tài khoản) có lãi không? Thêm `--slip 0.01` để test với trượt giá 1%. |

@@ -61,7 +61,7 @@ const unzipFirst = (buf) => {
   return (method === 8 ? inflateRawSync(data) : data).toString('utf8');
 };
 
-const archiveFile = async (path, cacheable, base = ARCHIVE) => {
+export const archiveFile = async (path, cacheable, base = ARCHIVE) => {
   const name = path.replace(/[/]/g, '_');
   const cached = new URL(name, CACHE_DIR);
   if (cacheable && existsSync(cached)) return readFileSync(cached, 'utf8');
@@ -124,7 +124,7 @@ export const fetchSeries = async (market, symbol, interval, bars) => {
 };
 
 // ---------- derivatives: funding rate, open interest, long/short ratios (futures archive) ----------
-const pool = async (items, limit, fn) => {
+export const pool = async (items, limit, fn) => {
   const out = new Array(items.length);
   let next = 0;
   await Promise.all(
@@ -138,7 +138,7 @@ const pool = async (items, limit, fn) => {
   return out;
 };
 
-const monthsBetween = (fromMs, toMs) => {
+export const monthsBetween = (fromMs, toMs) => {
   const out = [];
   const d = new Date(fromMs);
   let y = d.getUTCFullYear();
@@ -155,7 +155,7 @@ const monthsBetween = (fromMs, toMs) => {
   return out;
 };
 
-const csvRows = (csv) => (csv ? csv.split('\n').map((l) => l.trim().split(',')).filter((r) => /^\d/.test(r[0])) : []);
+export const csvRows = (csv) => (csv ? csv.split('\n').map((l) => l.trim().split(',')).filter((r) => /^\d/.test(r[0])) : []);
 
 // [[calcTimeMs, rate, intervalHours], ...]
 export const fetchFunding = async (symbol, fromMs) => {
@@ -344,6 +344,25 @@ export const fetchFuturesHistory = async (symbol, interval, fromMs) => {
   const sorted = [...rows.values()].sort((a, b) => a[0] - b[0]);
   const col = (k) => Float64Array.from(sorted, (r) => r[k]);
   return { symbol, t: col(0), o: col(1), h: col(2), l: col(3), c: col(4) };
+};
+
+// S3 listing of the data.binance.vision bucket: keys (or common prefixes with a delimiter)
+const S3 = 'https://s3-ap-northeast-1.amazonaws.com/data.binance.vision';
+export const s3List = async (prefix, delimiter = '') => {
+  const keys = [];
+  let marker = '';
+  for (;;) {
+    const res = await fetch(`${S3}?prefix=${prefix}${delimiter ? `&delimiter=${delimiter}` : ''}${marker ? `&marker=${marker}` : ''}`);
+    if (!res.ok) break;
+    const x = await res.text();
+    const found = delimiter
+      ? [...x.matchAll(/<Prefix>([^<]+)<\/Prefix>/g)].map((m) => m[1]).filter((p) => p !== prefix)
+      : [...x.matchAll(/<Key>([^<]+)<\/Key>/g)].map((m) => m[1]);
+    keys.push(...found);
+    if (!x.includes('<IsTruncated>true</IsTruncated>') || !found.length) break;
+    marker = found[found.length - 1];
+  }
+  return keys;
 };
 
 // fetchSpotHistory with a binary cache in research/.cache (refreshed once a day)

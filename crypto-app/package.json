@@ -16,6 +16,7 @@
     "sentiment": "node research/sentiment.js",
     "fundamentals": "node research/fundamentals.js",
     "listings": "node research/listings.js",
+    "shortlistings": "node research/shortlistings.js",
     "research": "node research/run.js",
     "research:test": "node --test research/*.test.js"
   },
