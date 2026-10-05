@@ -6,8 +6,8 @@
 //   - one shared capital pool (10% per trade, max 10 positions): yearly / monthly results
 //
 //   node research/dipverify.js [--symbols ...] [--from 2021-01] [--out dipverify-results.json]
-import { writeFileSync, readFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
-import { fetchSpotHistory } from './data.js';
+import { writeFileSync } from 'node:fs';
+import { loadSpotHistoryCached, segmentEnds } from './data.js';
 import { parseArgs, DEFAULT_UNIVERSE } from './common.js';
 import { tStat } from './stats.js';
 
@@ -20,7 +20,6 @@ const OUT = args.out || 'dipverify-results.json';
 const BAR_MIN = 5;
 const FEE = 0.001;
 const SLIP = 0.0005;
-const CACHE = new URL('./.cache/', import.meta.url);
 
 const VARIANTS = [];
 for (const d of [0.08, 0.12, 0.15, 0.2])
@@ -34,23 +33,7 @@ for (const v of VARIANTS) for (const th of THROUGH) for (const mode of MODES) CO
 const label = (c) =>
   `giảm ${c.d * 100}% so với đỉnh ${(c.l * BAR_MIN) / 60}h · chốt +${c.t * 100}% · ${c.s ? `cắt lỗ −${c.s * 100}%` : 'không cắt lỗ'} · tối đa 1 ngày · ${c.mode === 'limit' ? `lệnh chờ (giá xuyên ${c.th * 100}%)` : 'mua tay ở nến sau'}`;
 
-// ---------- data (binary cache, refreshed daily) ----------
-const load = async (sym) => {
-  const file = new URL(`spot5m_${sym}_${FROM}.bin`, CACHE);
-  if (existsSync(file) && Date.now() - statSync(file).mtimeMs < 86_400_000) {
-    const buf = readFileSync(file);
-    const all = new Float64Array(buf.buffer, buf.byteOffset, buf.byteLength / 8);
-    const n = all.length / 5;
-    return { symbol: sym, t: all.subarray(0, n), o: all.subarray(n, 2 * n), h: all.subarray(2 * n, 3 * n), l: all.subarray(3 * n, 4 * n), c: all.subarray(4 * n) };
-  }
-  const s = await fetchSpotHistory(sym, `${BAR_MIN}m`, FROM);
-  const n = s.t.length;
-  const all = new Float64Array(5 * n);
-  [s.t, s.o, s.h, s.l, s.c].forEach((a, k) => all.set(a, k * n));
-  mkdirSync(CACHE, { recursive: true });
-  writeFileSync(file, Buffer.from(all.buffer));
-  return s;
-};
+const load = (sym) => loadSpotHistoryCached(sym, `${BAR_MIN}m`, FROM);
 
 const rollingMax = (h, w) => {
   const out = new Float64Array(h.length).fill(NaN);
@@ -72,6 +55,7 @@ const trades = CONFIGS.map(() => ({ te: [], tx: [], r: [], ci: [] }));
 const run = (s, ci) => {
   const n = s.c.length;
   const maxes = { 12: rollingMax(s.h, 12), 48: rollingMax(s.h, 48) };
+  const segEnd = segmentEnds(s.t, 30 * 60_000);
   CONFIGS.forEach((c, k) => {
     const mx = maxes[c.l];
     const T = trades[k];
@@ -79,6 +63,10 @@ const run = (s, ci) => {
     while (i < n - 2) {
       const level = mx[i] * (1 - c.d);
       if (!(s.l[i] <= level * (1 - c.th))) {
+        i++;
+        continue;
+      }
+      if (c.mode === 'nextOpen' && segEnd[i] === i) {
         i++;
         continue;
       }
@@ -94,7 +82,7 @@ const run = (s, ci) => {
       }
       const tp = e * (1 + c.t);
       const sl = c.s ? e * (1 - c.s) : 0;
-      const last = Math.min(n - 1, j + c.h);
+      const last = Math.min(segEnd[j], j + c.h);
       let k2 = last;
       let px = s.c[last] * (1 - SLIP);
       for (let q = j + 1; q <= last; q++) {

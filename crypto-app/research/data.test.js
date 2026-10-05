@@ -26,3 +26,10 @@ test('funding after the archive ends keeps charging the last known rate every in
   attachDerivatives(s, [[t0, 0.0002, 8]], [], 4 * H);
   assert.deepEqual(s.fund, [0.0002, 0, 0.0002, 0, 0.0002, 0]);
 });
+
+test('segmentEnds stops positions before a trading halt', async () => {
+  const { segmentEnds } = await import('./data.js');
+  const m = 60_000;
+  const ends = segmentEnds([0, 5 * m, 10 * m, 500 * m, 505 * m], 30 * m);
+  assert.deepEqual([...ends], [2, 2, 2, 4, 4]);
+});

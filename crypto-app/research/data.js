@@ -2,7 +2,7 @@
 // Where api.binance.com / fapi.binance.com answer HTTP 451 (restricted location), spot falls back
 // to the public market-data mirror and futures to the official archive at data.binance.vision.
 import { inflateRawSync } from 'node:zlib';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 
 const ENDPOINTS = {
   spot: process.env.BINANCE_SPOT_URL || 'https://api.binance.com/api/v3/klines',
@@ -315,6 +315,36 @@ export const fetchSpotHistory = async (symbol, interval, fromMs) => {
   }
   const col = (k) => Float64Array.from(rows, (r) => r[k]);
   return { symbol, t: col(0), o: col(1), h: col(2), l: col(3), c: col(4) };
+};
+
+// fetchSpotHistory with a binary cache in research/.cache (refreshed once a day)
+export const loadSpotHistoryCached = async (symbol, interval, fromMs) => {
+  const file = new URL(`spot${interval}_${symbol}_${fromMs}.bin`, CACHE_DIR);
+  if (existsSync(file) && Date.now() - statSync(file).mtimeMs < 86_400_000) {
+    const buf = readFileSync(file);
+    const all = new Float64Array(buf.buffer, buf.byteOffset, buf.byteLength / 8);
+    const n = all.length / 5;
+    return { symbol, t: all.subarray(0, n), o: all.subarray(n, 2 * n), h: all.subarray(2 * n, 3 * n), l: all.subarray(3 * n, 4 * n), c: all.subarray(4 * n) };
+  }
+  const s = await fetchSpotHistory(symbol, interval, fromMs);
+  const n = s.t.length;
+  const all = new Float64Array(5 * n);
+  [s.t, s.o, s.h, s.l, s.c].forEach((a, k) => all.set(a, k * n));
+  mkdirSync(CACHE_DIR, { recursive: true });
+  writeFileSync(file, Buffer.from(all.buffer));
+  return s;
+};
+
+// segEnd[i] = last index before the next trading halt (gap between candles > maxGapMs).
+// Positions must be closed before a halt: symbols are sometimes re-used for a new token afterwards.
+export const segmentEnds = (t, maxGapMs) => {
+  const out = new Int32Array(t.length);
+  let end = t.length - 1;
+  for (let i = t.length - 1; i >= 0; i--) {
+    if (i < t.length - 1 && t[i + 1] - t[i] > maxGapMs) end = i;
+    out[i] = end;
+  }
+  return out;
 };
 
 // mulberry32 PRNG

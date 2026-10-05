@@ -12,7 +12,7 @@
 //
 //   node research/dipstudy.js [--symbols A,B] [--from 2021-01] [--split 2024-01] [--out dip-results.json]
 import { writeFileSync } from 'node:fs';
-import { fetchSpotHistory, rng } from './data.js';
+import { loadSpotHistoryCached, segmentEnds, rng } from './data.js';
 import { parseArgs, DEFAULT_UNIVERSE } from './common.js';
 
 const args = parseArgs(process.argv.slice(2));
@@ -54,11 +54,10 @@ const rollingMax = (h, w) => {
 };
 
 // exit simulation from bar j (exclusive) for a position entered at price e
-const exitFrom = (s, j, e, v) => {
+const exitFrom = (s, j, e, v, segEnd) => {
   const tp = e * (1 + v.t);
   const sl = v.s ? e * (1 - v.s) : 0;
-  const n = s.c.length;
-  const last = Math.min(n - 1, j + v.h);
+  const last = Math.min(segEnd[j], j + v.h);
   for (let k = j + 1; k <= last; k++) {
     if (v.s && s.l[k] <= sl) return { k, px: Math.min(s.o[k], sl) * (1 - SLIP) };
     if (s.h[k] >= tp * (1 + THROUGH)) return { k, px: Math.max(s.o[k], tp) };
@@ -87,6 +86,7 @@ const holdReturns = [[], []];
 const studyCoin = (s, ci) => {
   const n = s.c.length;
   const maxes = L.map((w) => rollingMax(s.h, w));
+  const segEnd = segmentEnds(s.t, 30 * 60_000);
   const eq = new Float64Array(V * 2).fill(1);
   const rand = rng(1234 + ci);
   const month = (30 * 1440) / BAR_MIN;
@@ -101,14 +101,14 @@ const studyCoin = (s, ci) => {
         continue;
       }
       const e = Math.min(s.o[i], level); // limit order filled (or gapped through)
-      const ex = exitFrom(s, i, e, v);
+      const ex = exitFrom(s, i, e, v, segEnd);
       const r = (ex.px / e) * (1 - FEE) * (1 - FEE) - 1;
       // control: random entry within ±30 days, same exits
       const lo = Math.max(0, i - month);
       const hi = Math.min(n - 2, i + month);
       const j = lo + Math.floor(rand() * (hi - lo));
       const ce = s.c[j];
-      const cx = exitFrom(s, j, ce, v);
+      const cx = exitFrom(s, j, ce, v, segEnd);
       const rc = (cx.px / ce) * (1 - FEE) * (1 - FEE) - 1;
 
       const sp = s.t[i] < SPLIT ? 0 : 1;
@@ -145,7 +145,7 @@ const used = [];
 for (let ci = 0; ci < SYMBOLS.length; ci++) {
   const sym = SYMBOLS[ci];
   try {
-    const s = await fetchSpotHistory(sym, `${BAR_MIN}m`, FROM);
+    const s = await loadSpotHistoryCached(sym, `${BAR_MIN}m`, FROM);
     if (s.c.length < 30 * 288) {
       console.log(`  bỏ ${sym}: quá ít dữ liệu`);
       continue;
