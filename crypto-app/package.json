@@ -10,6 +10,8 @@
     "preview": "vite preview",
     "discover": "node research/discover.js",
     "rotation": "node research/rotation.js",
+    "dipstudy": "node research/dipstudy.js",
+    "dipverify": "node research/dipverify.js",
     "research": "node research/run.js",
     "research:test": "node --test research/*.test.js"
   },

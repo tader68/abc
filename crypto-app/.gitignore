@@ -27,3 +27,6 @@ dist-ssr
 research-results.json
 discover-results.json
 research/.cache/
+rotation-results.json
+dip-results.json
+dipverify-results.json
