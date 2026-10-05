@@ -190,6 +190,71 @@ bh = stats([np.nanmean(fwd[:, i]) for i in steps], 'Đối chứng: giữ đều
 for s in results + [bh]:
     print(f'   • {s["label"]}\n     tổng {s["total"]:7.1f}% · {s["cagr"]:6.1f}%/năm · sụt tối đa {s["maxDD"]:5.1f}% · t-stat {s["t"]:5.2f} · {s["win"]:.0f}% số kỳ lãi')
 
+# ---------- trade only the most confident predictions ----------
+print(f'\n4b) CHỈ GIAO DỊCH KHI MÔ HÌNH TỰ TIN NHẤT (mỗi {H * 4}h chọn N coin có xác suất xa 50% nhất, long nếu >50%, short nếu <50%):')
+bins = np.quantile(np.abs(pp - 0.5), [0, 0.5, 0.8, 0.9, 0.95, 0.99, 1])
+for lo, hi in zip(bins[:-1], bins[1:]):
+    sel = (np.abs(pp - 0.5) >= lo) & (np.abs(pp - 0.5) <= hi)
+    print(f'   độ tự tin {lo:.3f}–{hi:.3f}: {sel.sum():7d} dự đoán · đúng hướng {((pp[sel] > 0.5) == yy[sel]).mean() * 100:.1f}%')
+for N in [1, 3, 5]:
+    for min_conf in [0.0, 0.05, 0.1]:
+        rets = []
+        prevw = np.zeros(C)
+        for i in steps:
+            pr = p_dir[:, i]
+            ok = ~np.isnan(pr) & ~np.isnan(fwd[:, i]) & (np.abs(pr - 0.5) >= min_conf)
+            w = np.zeros(C)
+            if ok.any():
+                idx = np.where(ok)[0][np.argsort(-np.abs(pr[ok] - 0.5))][:N]
+                w[idx] = np.sign(pr[idx] - 0.5) / N
+            r = np.nansum(w * fwd[:, i]) - np.nansum(w * fund_fwd[:, i]) - np.abs(w - prevw).sum() * COST
+            prevw = w
+            rets.append(r)
+        s = stats(rets, f'top {N} coin tự tin nhất, chỉ khi xác suất lệch ≥{min_conf * 100:.0f}%')
+        results.append(s)
+        print(f'   • {s["label"]}: {s["cagr"]:6.1f}%/năm · sụt {s["maxDD"]:5.1f}% · t={s["t"]:5.2f} · {s["win"]:.0f}% số kỳ lãi')
+
+# only very confident predictions, every coin that clears the bar (how concentrated are they?)
+print('\n4c) CHỈ VÀO LỆNH KHI ĐỘ TỰ TIN VƯỢT NGƯỠNG (mọi coin vượt ngưỡng, chia đều vốn):')
+for thr in [0.2, 0.25, 0.3, 0.33]:
+    rets, ndays, nlong, nshort, per_trade = [], 0, 0, 0, []
+    prevw = np.zeros(C)
+    for i in steps:
+        pr = p_dir[:, i]
+        ok = ~np.isnan(pr) & ~np.isnan(fwd[:, i]) & (np.abs(pr - 0.5) >= thr)
+        w = np.zeros(C)
+        if ok.any():
+            ndays += 1
+            w[ok] = np.sign(pr[ok] - 0.5) / ok.sum()
+            nlong += int((pr[ok] > 0.5).sum())
+            nshort += int((pr[ok] < 0.5).sum())
+            per_trade += list(np.sign(pr[ok] - 0.5) * fwd[ok, i] - 2 * COST)
+        r = np.nansum(w * fwd[:, i]) - np.nansum(w * fund_fwd[:, i]) - np.abs(w - prevw).sum() * COST
+        prevw = w
+        rets.append(r)
+    s = stats(rets, f'ngưỡng ±{thr * 100:.0f}%')
+    pt = np.array(per_trade)
+    print(f'   • ngưỡng ±{thr * 100:.0f}%: có lệnh {ndays}/{len(steps)} ngày · {nlong} long / {nshort} short · lãi TB/lệnh sau phí {pt.mean() * 100 if len(pt) else 0:.2f}% (thắng {(pt > 0).mean() * 100 if len(pt) else 0:.0f}%) · danh mục {s["cagr"]:.1f}%/năm · sụt {s["maxDD"]:.1f}% · t={s["t"]:.2f}')
+
+# what are those confident days? per-year stability and the market move just before them
+print('\n4d) NHỮNG NGÀY MÔ HÌNH RẤT TỰ TIN (≥30%): ổn định theo năm không, và trước đó thị trường làm gì?')
+mkt_past = np.full(n, np.nan)  # average coin return over the 3 days (18 bars) before the decision
+mkt_past[18:] = np.nanmean(CL[:, 18:] / CL[:, :-18] - 1, axis=0)
+for thr in [0.25, 0.3]:
+    by_year = {}
+    past = []
+    for i in steps:
+        pr = p_dir[:, i]
+        ok = ~np.isnan(pr) & ~np.isnan(fwd[:, i]) & (np.abs(pr - 0.5) >= thr)
+        if not ok.any():
+            continue
+        y = str(month[i])[:4]
+        by_year.setdefault(y, []).extend(list(np.sign(pr[ok] - 0.5) * fwd[ok, i] - 2 * COST))
+        past.append(mkt_past[i])
+    yrs = ' · '.join(f'{y}: {len(v)} lệnh, TB {np.mean(v) * 100:.1f}%, thắng {(np.array(v) > 0).mean() * 100:.0f}%' for y, v in sorted(by_year.items()))
+    print(f'   ngưỡng ±{thr * 100:.0f}%: {yrs}')
+    print(f'      thị trường 3 ngày trước đó: trung bình {np.nanmean(past) * 100:.1f}% (mọi ngày: {np.nanmean(mkt_past[steps]) * 100:.1f}%)')
+
 # monthly view of the best strategy
 best = max(results, key=lambda s: s['t'])
 print(f'\nChiến lược có t-stat cao nhất: {best["label"]} (t={best["t"]:.2f}; cần ≥ 2.5 mới coi là lợi thế thật)')
