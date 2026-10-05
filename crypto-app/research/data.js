@@ -61,11 +61,11 @@ const unzipFirst = (buf) => {
   return (method === 8 ? inflateRawSync(data) : data).toString('utf8');
 };
 
-const archiveFile = async (path, cacheable) => {
+const archiveFile = async (path, cacheable, base = ARCHIVE) => {
   const name = path.replace(/[/]/g, '_');
   const cached = new URL(name, CACHE_DIR);
   if (cacheable && existsSync(cached)) return readFileSync(cached, 'utf8');
-  const res = await fetch(`${ARCHIVE}/${path}`);
+  const res = await fetch(`${base}/${path}`);
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`archive ${path}: HTTP ${res.status}`);
   const csv = unzipFirst(Buffer.from(await res.arrayBuffer()));
@@ -284,6 +284,37 @@ export const loadUniverse = async ({ market, symbols, interval, bars, derivs = t
     }
   }
   return list;
+};
+
+// ---------- long spot history: monthly archives + REST mirror for the latest weeks ----------
+const SPOT_ARCHIVE = 'https://data.binance.vision/data/spot';
+
+// Columns as typed arrays { symbol, t, o, h, l, c } from fromMs (or the listing date) until now.
+export const fetchSpotHistory = async (symbol, interval, fromMs) => {
+  const current = new Date().toISOString().slice(0, 7);
+  const months = monthsBetween(fromMs, Date.now()).filter((m) => m !== current);
+  const csvs = await pool(months, 12, (ym) =>
+    archiveFile(`monthly/klines/${symbol}/${interval}/${symbol}-${interval}-${ym}.zip`, false, SPOT_ARCHIVE).catch(() => null),
+  );
+  const rows = [];
+  for (const r of csvs.flatMap(csvRows)) {
+    let ts = +r[0];
+    if (ts > 1e14) ts = Math.floor(ts / 1000); // archives switched to microseconds in 2025
+    if (ts >= fromMs) rows.push([ts, +r[1], +r[2], +r[3], +r[4]]);
+  }
+  rows.sort((a, b) => a[0] - b[0]);
+  let start = rows.length ? rows[rows.length - 1][0] + 1 : fromMs;
+  for (;;) {
+    const res = await fetch(`${SPOT_MIRROR}?symbol=${symbol}&interval=${interval}&limit=1000&startTime=${start}`);
+    if (!res.ok) break;
+    const page = await res.json();
+    const closed = page.filter((k) => k[6] < Date.now());
+    closed.forEach((k) => rows.push([k[0], +k[1], +k[2], +k[3], +k[4]]));
+    if (page.length < 1000 || !closed.length) break;
+    start = page[page.length - 1][0] + 1;
+  }
+  const col = (k) => Float64Array.from(rows, (r) => r[k]);
+  return { symbol, t: col(0), o: col(1), h: col(2), l: col(3), c: col(4) };
 };
 
 // mulberry32 PRNG
