@@ -24,6 +24,7 @@ ap.add_argument('--horizon', type=int, default=6, help='prediction horizon in ba
 ap.add_argument('--train-months', type=int, default=12, help='minimum history before the first prediction')
 ap.add_argument('--placebo', action='store_true', help='shuffle the targets: results must collapse to chance')
 ap.add_argument('--out', default='ml-results.json')
+ap.add_argument('--trade-symbols', default='', help='comma list: only these coins may be traded in sections 4c-4e')
 ap.add_argument('--leaves', type=int, default=31)
 ap.add_argument('--lr', type=float, default=0.03)
 ap.add_argument('--rounds', type=int, default=300)
@@ -197,6 +198,7 @@ bh = stats([np.nanmean(fwd[:, i]) for i in steps], 'Đối chứng: giữ đều
 for s in results + [bh]:
     print(f'   • {s["label"]}\n     tổng {s["total"]:7.1f}% · {s["cagr"]:6.1f}%/năm · sụt tối đa {s["maxDD"]:5.1f}% · t-stat {s["t"]:5.2f} · {s["win"]:.0f}% số kỳ lãi')
 
+tradable = np.array([(not args.trade_symbols) or (s in args.trade_symbols.split(',')) for s in syms])
 # ---------- trade only the most confident predictions ----------
 print(f'\n4b) CHỈ GIAO DỊCH KHI MÔ HÌNH TỰ TIN NHẤT (mỗi {H * args.hours_per_bar:g}h chọn N coin có xác suất xa 50% nhất, long nếu >50%, short nếu <50%):')
 bins = np.quantile(np.abs(pp - 0.5), [0, 0.5, 0.8, 0.9, 0.95, 0.99, 1])
@@ -228,7 +230,7 @@ for thr in [0.2, 0.25, 0.3, 0.33]:
     prevw = np.zeros(C)
     for i in steps:
         pr = p_dir[:, i]
-        ok = ~np.isnan(pr) & ~np.isnan(fwd[:, i]) & (np.abs(pr - 0.5) >= thr)
+        ok = ~np.isnan(pr) & ~np.isnan(fwd[:, i]) & (np.abs(pr - 0.5) >= thr) & tradable
         w = np.zeros(C)
         if ok.any():
             ndays += 1
@@ -252,7 +254,7 @@ for thr in [0.25, 0.3]:
     past = []
     for i in steps:
         pr = p_dir[:, i]
-        ok = ~np.isnan(pr) & ~np.isnan(fwd[:, i]) & (np.abs(pr - 0.5) >= thr)
+        ok = ~np.isnan(pr) & ~np.isnan(fwd[:, i]) & (np.abs(pr - 0.5) >= thr) & tradable
         if not ok.any():
             continue
         y = str(month[i])[:4]
@@ -261,6 +263,35 @@ for thr in [0.25, 0.3]:
     yrs = ' · '.join(f'{y}: {len(v)} lệnh, TB {np.mean(v) * 100:.1f}%, thắng {(np.array(v) > 0).mean() * 100:.0f}%' for y, v in sorted(by_year.items()))
     print(f'   ngưỡng ±{thr * 100:.0f}%: {yrs}')
     print(f'      thị trường 3 ngày trước đó: trung bình {np.nanmean(past) * 100:.1f}% (mọi ngày: {np.nanmean(mkt_past[steps]) * 100:.1f}%)')
+
+# position cap: at most 10% of equity per coin (the rest stays in cash) + the worst trades
+print('\n4e) GIỚI HẠN MỖI LỆNH TỐI ĐA 10% VỐN (phần còn lại để tiền mặt) + các lệnh tệ nhất:')
+for thr in [0.25, 0.3]:
+    rets, trades = [], []
+    prevw = np.zeros(C)
+    for i in steps:
+        pr = p_dir[:, i]
+        ok = ~np.isnan(pr) & ~np.isnan(fwd[:, i]) & (np.abs(pr - 0.5) >= thr) & tradable
+        w = np.zeros(C)
+        if ok.any():
+            w[ok] = np.sign(pr[ok] - 0.5) / max(ok.sum(), 10)
+            for c in np.where(ok)[0]:
+                trades.append((float(np.sign(pr[c] - 0.5) * fwd[c, i] - 2 * COST), syms[c], str(np.datetime64(int(t[i]), 'ms'))[:10]))
+        r = np.nansum(w * fwd[:, i]) - np.nansum(w * fund_fwd[:, i]) - np.abs(w - prevw).sum() * COST
+        prevw = w
+        rets.append(r)
+    s = stats(rets, f'cap10 ±{thr}')
+    eq = np.cumprod(1 + np.array(rets))
+    yearly = {}
+    for i, e in zip(steps, eq):
+        yearly[str(month[i])[:4]] = e
+    prev, ys = 1.0, []
+    for y, e in yearly.items():
+        ys.append(f'{y} {(e / prev - 1) * 100:+.0f}%')
+        prev = e
+    worst = sorted(trades)[:5]
+    print(f'   ngưỡng ±{thr * 100:.0f}%: {s["cagr"]:.1f}%/năm · sụt {s["maxDD"]:.1f}% · t={s["t"]:.2f} · theo năm: {" · ".join(ys)}')
+    print('      lệnh tệ nhất: ' + ', '.join(f'{sym} {d} {r * 100:.0f}%' for r, sym, d in worst))
 
 # monthly view of the best strategy
 best = max(results, key=lambda s: s['t'])
