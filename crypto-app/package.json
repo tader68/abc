@@ -18,6 +18,7 @@
     "listings": "node research/listings.js",
     "shortlistings": "node research/shortlistings.js",
     "replicate": "node research/replicate.js",
+    "replicate2": "node research/replicate2.js",
     "ml:export": "node research/mlexport.js",
     "ml": "python3 research/ml_model.py",
     "research": "node research/run.js",
