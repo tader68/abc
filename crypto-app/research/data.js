@@ -65,10 +65,20 @@ export const archiveFile = async (path, cacheable, base = ARCHIVE) => {
   const name = path.replace(/[/]/g, '_');
   const cached = new URL(name, CACHE_DIR);
   if (cacheable && existsSync(cached)) return readFileSync(cached, 'utf8');
-  const res = await fetch(`${base}/${path}`);
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`archive ${path}: HTTP ${res.status}`);
-  const csv = unzipFirst(Buffer.from(await res.arrayBuffer()));
+  // retry transient network failures (dropped sockets, 5xx) with backoff
+  let csv;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await fetch(`${base}/${path}`);
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`archive ${path}: HTTP ${res.status}`);
+      csv = unzipFirst(Buffer.from(await res.arrayBuffer()));
+      break;
+    } catch (e) {
+      if (attempt >= 4) throw e;
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+    }
+  }
   if (cacheable) {
     mkdirSync(CACHE_DIR, { recursive: true });
     writeFileSync(cached, csv);
