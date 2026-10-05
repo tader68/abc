@@ -12,6 +12,7 @@
     "rotation": "node research/rotation.js",
     "dipstudy": "node research/dipstudy.js",
     "dipverify": "node research/dipverify.js",
+    "carry": "node research/carry.js",
     "research": "node research/run.js",
     "research:test": "node --test research/*.test.js"
   },

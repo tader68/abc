@@ -317,6 +317,35 @@ export const fetchSpotHistory = async (symbol, interval, fromMs) => {
   return { symbol, t: col(0), o: col(1), h: col(2), l: col(3), c: col(4) };
 };
 
+// USDT-M futures klines from fromMs until yesterday: monthly archives, falling back to daily
+// archives for months not published yet (the previous month appears a few days late).
+export const fetchFuturesHistory = async (symbol, interval, fromMs) => {
+  const now = new Date();
+  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const loadMonth = async (ym) => {
+    const monthly = await archiveFile(`monthly/klines/${symbol}/${interval}/${symbol}-${interval}-${ym}.zip`, true).catch(() => null);
+    if (monthly) return [monthly];
+    const [y, m] = ym.split('-').map(Number);
+    const days = [];
+    for (let d = 1; d <= 31; d++) {
+      const day = Date.UTC(y, m - 1, d);
+      if (new Date(day).getUTCMonth() !== m - 1 || day >= today) break;
+      days.push(new Date(day).toISOString().slice(0, 10));
+    }
+    return pool(days, 16, (ymd) => archiveFile(`daily/klines/${symbol}/${interval}/${symbol}-${interval}-${ymd}.zip`, true).catch(() => null));
+  };
+  const parts = await pool(monthsBetween(fromMs, now.getTime()), 8, loadMonth);
+  const rows = new Map();
+  for (const r of parts.flat().flatMap(csvRows)) {
+    let ts = +r[0];
+    if (ts > 1e14) ts = Math.floor(ts / 1000);
+    if (ts >= fromMs) rows.set(ts, [ts, +r[1], +r[2], +r[3], +r[4]]);
+  }
+  const sorted = [...rows.values()].sort((a, b) => a[0] - b[0]);
+  const col = (k) => Float64Array.from(sorted, (r) => r[k]);
+  return { symbol, t: col(0), o: col(1), h: col(2), l: col(3), c: col(4) };
+};
+
 // fetchSpotHistory with a binary cache in research/.cache (refreshed once a day)
 export const loadSpotHistoryCached = async (symbol, interval, fromMs) => {
   const file = new URL(`spot${interval}_${symbol}_${fromMs}.bin`, CACHE_DIR);
