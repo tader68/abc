@@ -170,6 +170,35 @@ def build():
             radar = '<p class="muted">Nến gần nhất không có coin nào rơi ≥6% trong 24h, thị trường đang yên.</p>'
         radar = f"<p class=\"muted\">Nến đóng lúc {esc(last_run.get('bar_close', ''))} · ngưỡng mua: 90%</p>" + radar
 
+    # ---------- comparison with the backtest (what "normal" looks like) ----------
+    ref = load(LIVE / 'backtest_summary.json', {})
+    ref_html = ''
+    if ref.get('curve'):
+        W, Hh = 640, 150
+        xs = np.array([c[0] for c in ref['curve']], dtype=float)
+        ys = np.log(np.array([c[1] for c in ref['curve']]))
+        x = (xs - xs.min()) / max(1, xs.max() - xs.min()) * (W - 20) + 10
+        y = Hh - 10 - (ys - ys.min()) / max(1e-9, ys.max() - ys.min()) * (Hh - 20)
+        years = ''.join(f'<text x="{(dt.datetime(yr, 1, 1).timestamp() * 1000 - xs.min()) / max(1, xs.max() - xs.min()) * (W - 20) + 10:.0f}" y="{Hh}" class="tick">{yr}</text>'
+                        for yr in range(2023, 2027))
+        live_wr = f'{(rets > 0).mean() * 100:.0f}%' if len(rets) else '–'
+        live_mean = f'{rets.mean() * 100:+.2f}%' if len(rets) else '–'
+        live_dd = 0.0
+        e2 = pk = 1.0
+        for c in real_closed:
+            e2 *= 1 + c['ret'] * c['size']
+            pk = max(pk, e2)
+            live_dd = max(live_dd, 1 - e2 / pk)
+        ref_html = f'''<div class="card"><h2>So với backtest {esc(ref['from'])} → {esc(ref['to'][:7])} ({ref['trades']} lệnh mô phỏng)</h2>
+<svg viewBox="0 0 {W} {Hh + 4}" class="chart" role="img" aria-label="Đường vốn backtest (thang log)"><polyline points="{' '.join(f'{a:.1f},{b:.1f}' for a, b in zip(x, y))}" class="line ref"/>{years}</svg>
+<table><thead><tr><th></th><th>Backtest</th><th>Bot thật</th></tr></thead><tbody>
+<tr><td>Tỷ lệ thắng</td><td>{ref['win'] * 100:.0f}%</td><td>{live_wr}</td></tr>
+<tr><td>Lãi TB/lệnh</td><td>{ref['mean_ret'] * 100:+.2f}%</td><td>{live_mean}</td></tr>
+<tr><td>Sụt tối đa từ đỉnh</td><td>{ref['max_dd'] * 100:.0f}%</td><td>{f'{live_dd * 100:.0f}%' if real_closed else '–'}</td></tr>
+<tr><td>Tháng có lãi</td><td>{ref['months_positive'] * 100:.0f}% (tệ nhất {ref['worst_month'] * 100:+.1f}%)</td><td>{f'{sum(v[0] > 0 for v in months.values())}/{len(months)}' if months else '–'}</td></tr>
+<tr><td>Chuỗi thua dài nhất</td><td>{ref['max_losing_streak']} lệnh</td><td>–</td></tr></tbody></table>
+<p class="muted">Bot tự cảnh báo trên Telegram khi kết quả thật xấu hơn những gì backtest coi là bình thường (sụt ≥20%, 15 lệnh gần nhất thắng &lt;{ref['p5_win_rate_15'] * 100:.0f}%, thua liên tiếp ≥8).</p></div>'''
+
     stat = lambda label, value, cls='': f'<div class="stat"><div class="label">{label}</div><div class="value {cls}">{value}</div></div>'  # noqa: E731
     stats = ''.join([
         stat('Lệnh đã đóng', len(real_closed)),
@@ -194,7 +223,7 @@ main{{max-width:980px;margin:0 auto;padding:20px 16px 40px}}h1{{font-size:22px;m
 .label{{color:var(--muted);font-size:13px}}.value{{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}}
 table{{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:14px}}th,td{{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);white-space:nowrap}}
 th{{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.03em}}.pos{{color:var(--pos)}}.neg{{color:var(--neg)}}
-.chart{{width:100%;height:auto}}.chart .line{{fill:none;stroke:var(--accent);stroke-width:2.5}}.chart .axis{{stroke:var(--line);stroke-dasharray:4 4}}
+.chart{{width:100%;height:auto}}.chart .line{{fill:none;stroke:var(--accent);stroke-width:2.5}}.chart .axis{{stroke:var(--line);stroke-dasharray:4 4}}.chart .ref{{stroke:var(--muted);stroke-width:2}}.chart .tick{{fill:var(--muted);font-size:11px}}
 .bar{{display:inline-block;width:90px;height:8px;background:var(--line);border-radius:4px;margin-right:8px;vertical-align:middle;overflow:hidden}}
 .bar span{{display:block;height:100%;background:var(--muted)}}.bar span.hot{{background:var(--pos)}}
 .grid2{{display:grid;grid-template-columns:1fr 1fr;gap:14px}}@media (max-width:720px){{.grid2{{grid-template-columns:1fr}}}}.grid2 .card{{margin-top:0}}
@@ -211,6 +240,7 @@ ul{{margin:6px 0;padding-left:18px}}li{{color:var(--muted);font-size:13px}}
 <div class="grid2" style="margin-top:14px"><div class="card"><h2>Đường vốn (các lệnh đã đóng)</h2>{svg}</div>
 <div class="card"><h2>Theo tháng</h2>{month_html or '<p class="muted">Chưa có.</p>'}
 <p class="muted">Kỳ vọng từ backtest: thắng ~70–90%, lãi TB 2–3%/lệnh, ~6–7 lệnh/tháng, +25–30%/năm.</p></div></div>
+{ref_html}
 <div class="card"><h2>Radar: coin đang bị bán tháo</h2>{radar}</div>
 <div class="card"><h2>Lịch sử lệnh</h2>{closed_html}</div>
 <p class="muted" style="margin-top:16px">Kết quả tính theo giá mở nến kế tiếp như backtest; kết quả thật trên Binance của bạn có thể lệch một chút. Hỏi nhanh trên Telegram: /baocao · /lenh · /trangthai</p>

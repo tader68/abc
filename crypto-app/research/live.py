@@ -339,6 +339,50 @@ now_vn = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=cfg['tz_hours'])
 if now_vn.hour in (7, 8, 9) and st.get('heartbeat_day') != now_vn.strftime('%Y-%m-%d'):
     st['heartbeat_day'] = now_vn.strftime('%Y-%m-%d')
     send([f"🤖 Bot hoạt động bình thường · {len(st['open'])} lệnh đang mở · {len(st['closed'])} lệnh đã đóng"] + report(st)[:1])
+
+def guard(st):
+    """Safety brake: compare the real results with what the backtest considers normal and warn (once per level)."""
+    ref = json.loads((HERE / 'live/backtest_summary.json').read_text(encoding='utf-8')) if (HERE / 'live/backtest_summary.json').exists() else {}
+    real = [c for c in sorted(st['closed'], key=lambda c: c['exit_t']) if not c.get('missed') and c.get('user') != 'skipped']
+    if not real:
+        return []
+    eq = peak = 1.0
+    streak = 0
+    for c in real:
+        eq *= 1 + c['ret'] * c['size']
+        peak = max(peak, eq)
+        streak = streak + 1 if c['ret'] <= 0 else 0
+    dd_now = 1 - eq / peak
+    g = st.setdefault('guard', {})
+    out = []
+    worst = ref.get('max_dd', 0.28)
+    if dd_now >= worst and g.get('dd') != 'stop':
+        g['dd'] = 'stop'
+        out.append([f'🛑 PHANH AN TOÀN: vốn theo bot đang sụt {dd_now * 100:.0f}% từ đỉnh, vượt mức tệ nhất trong backtest ({worst * 100:.0f}%).',
+                    'Thị trường có thể đã thay đổi. Nên DỪNG vào lệnh mới, xem lại cùng Claude (gửi state.json + history/runs.jsonl).'])
+    elif dd_now >= 0.2 and not g.get('dd'):
+        g['dd'] = 'warn'
+        out.append([f'⚠️ Cảnh báo: vốn theo bot đang sụt {dd_now * 100:.0f}% từ đỉnh (backtest từng sụt tối đa {worst * 100:.0f}% rồi hồi lại).',
+                    'Vẫn trong vùng từng xảy ra, nhưng hãy giữ vốn mỗi lệnh nhỏ và đừng nạp thêm tiền lúc này.'])
+    elif dd_now < 0.1:
+        g.pop('dd', None)  # recovered: re-arm
+    if len(real) >= 15:
+        wr = sum(c['ret'] > 0 for c in real[-15:]) / 15
+        floor = ref.get('p5_win_rate_15', 0.4)
+        if wr < floor and not g.get('wr'):
+            g['wr'] = True
+            out.append([f'⚠️ Cảnh báo: 15 lệnh gần nhất chỉ thắng {wr * 100:.0f}%. Backtest: 95% thời gian ≥{floor * 100:.0f}%, trung bình {ref.get("win", 0.84) * 100:.0f}%.',
+                        'Có thể chỉ là xui, nhưng nếu kéo dài thì nên tạm dừng và huấn luyện lại mô hình.'])
+        elif wr >= floor + 0.2:
+            g.pop('wr', None)
+    if streak >= 8 and g.get('streak', 0) < 8:
+        out.append([f'⚠️ {streak} lệnh thua liên tiếp. Backtest từng có chuỗi tới {ref.get("max_losing_streak", 14)} lệnh (thường do nhiều lệnh cùng thua trong một vụ sập), sau đó hồi lại.'])
+    g['streak'] = streak
+    return out
+
+
+for m in guard(st):
+    send(m)
 save_state(st, args.state)
 if not args.asof and not args.dry_run:
     HISTORY.mkdir(parents=True, exist_ok=True)
