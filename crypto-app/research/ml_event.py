@@ -192,7 +192,7 @@ for m in test_months:
     mdl = lgb.train(params, lgb.Dataset(Xe[tr], ytrain[tr]), 300)
     p[te] = mdl.predict(Xe[te])
     imp += mdl.feature_importance('gain')
-    print(f'  {m}: {tr.sum():,} sự kiện để học · {te.sum():,} để dự đoán · {time.time() - t0:.0f}s', flush=True)
+    print(f'  {m}: {len(tr):,} sự kiện để học · {te.sum():,} để dự đoán · {time.time() - t0:.0f}s', flush=True)
 
 oos = np.isfinite(p)
 q = np.quantile(p[oos], [0, 0.5, 0.8, 0.9, 0.95, 1])
