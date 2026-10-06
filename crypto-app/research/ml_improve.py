@@ -28,6 +28,8 @@ ap.add_argument('--show-trades', action='store_true', help='with --only: list be
 ap.add_argument('--btc-exit', type=float, default=0, help='close all positions when BTC has fallen this much since the signal (checked at each 4h close)')
 ap.add_argument('--mkt-exit', type=float, default=0, help='close when the median coin has fallen this much since the signal')
 ap.add_argument('--max-open', type=int, default=0, help='maximum simultaneous positions (default 1/size)')
+ap.add_argument('--conf-size', type=float, default=0, help='abs mode: scale each position by 1 + k * (p - thr) / (1 - thr), so more confident signals get more capital')
+ap.add_argument('--min-age-days', type=float, default=0, help='only trade coins listed on futures at least this many days')
 ap.add_argument('--size', type=float, default=0.1, help='fraction of equity per position')
 ap.add_argument('--side', default='long', choices=['long', 'short'], help='short: sell after a pump instead of buying after a drop')
 ap.add_argument('--thr-mode', default='centered', choices=['centered', 'abs'],
@@ -49,6 +51,8 @@ SPLIT = np.datetime64('2025-01-01').astype('datetime64[ms]').astype(np.int64)
 COST = args.cost  # fee + slippage per side
 MAJ12 = 'BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,LINKUSDT,AVAXUSDT,LTCUSDT,TRXUSDT,DOTUSDT'.split(',')
 MAJ20 = MAJ12 + 'BCHUSDT,ATOMUSDT,NEARUSDT,UNIUSDT,ETCUSDT,FILUSDT,APTUSDT,OPUSDT'.split(',')
+MAJ40 = MAJ20 + 'INJUSDT,AAVEUSDT,XLMUSDT,ALGOUSDT,SANDUSDT,MANAUSDT,AXSUSDT,GRTUSDT,HBARUSDT,VETUSDT,ICPUSDT,THETAUSDT,CRVUSDT,SNXUSDT,COMPUSDT,ZECUSDT,DASHUSDT,XTZUSDT,CHZUSDT,ENJUSDT'.split(',')
+UNIVERSES = {'12': MAJ12, '20': MAJ20, '40': MAJ40, 'all': syms}  # 'all' includes coins that later died (LUNA, FTT...)
 
 # coin drawdown from its 24h (6-bar) high, known at the close of each bar
 hi6 = np.full((C, n), np.nan)
@@ -66,6 +70,7 @@ rise24 = CL / lo6 - 1
 SIDE = 1 if args.side == 'long' else -1
 
 
+FIRST = np.argmax(np.isfinite(CL), axis=1)  # first bar each coin traded
 trade_bars = []
 trade_log = []
 _last_trades = []
@@ -115,13 +120,15 @@ def run(thr, H, tp, sl, need_drop, universe, from_t, to_t):
         pr = p_dir[:, i]
         edge = pr if args.thr_mode == 'abs' else SIDE * (pr - 0.5)
         ok = tradable & np.isfinite(pr) & (edge >= thr) & np.isfinite(O[:, i + 1])
+        if args.min_age_days:
+            ok &= (i - FIRST) >= args.min_age_days * 6
         if need_drop:
             ok &= (drop24[:, i] <= -need_drop) if SIDE > 0 else (rise24[:, i] >= need_drop)
         for c in np.where(ok)[0]:
             if c in open_pos or len(open_pos) >= (args.max_open or max(1, int(round(1 / args.size)))):
                 continue
             ptp, pH = (PLAN_TP[c, i], int(PLAN_H[c, i])) if PLAN_TP is not None else (tp, H)
-            open_pos[c] = dict(tp=ptp, entry=O[c, i + 1] * (1 + SIDE * 0.0002), exit_bar=i + 1 + pH, size=args.size * eq, fund=0.0, bar=i)
+            open_pos[c] = dict(tp=ptp, entry=O[c, i + 1] * (1 + SIDE * 0.0002), exit_bar=i + 1 + pH, size=args.size * eq * (1 + args.conf_size * (pr[c] - thr) / (1 - thr) if args.conf_size and args.thr_mode == 'abs' else 1), fund=0.0, bar=i)
         peak = max(peak, eq)
         mdd = max(mdd, 1 - eq / peak)
         curve.append((t[i], eq))
@@ -137,7 +144,7 @@ start = t[np.argmax(np.isfinite(p_dir).any(axis=0))]
 end = t[-1]
 if args.only:
     thr, H, tp, sl, need, uni = args.only.split(',')
-    universe = MAJ12 if uni == '12' else MAJ20
+    universe = UNIVERSES[uni]
     for name, a, b in [('chọn 2022–2024', start, SPLIT), ('kiểm tra 2025–nay', SPLIT, end + 1)]:
         r = run(float(thr), int(H), float(tp), float(sl), float(need), universe, a, b)
         cv = r['curve']
@@ -184,7 +191,7 @@ grid = list(itertools.product(THRS, [6, 12, 18], [0, 0.04, 0.08], [0, 0.08], [0,
 print(f'Thử {len(grid)} biến thể · CHỌN trên {np.datetime64(int(start), "ms")!s:.10} → 2024-12-31 · KIỂM TRA trên 2025-01-01 → {np.datetime64(int(end), "ms")!s:.10}\n')
 rows = []
 for thr, H, tp, sl, need, uni in grid:
-    universe = MAJ12 if uni == '12' else MAJ20
+    universe = UNIVERSES[uni]
     a = run(thr, H, tp, sl, need, universe, start, SPLIT)
     rows.append(dict(thr=thr, H=H, tp=tp, sl=sl, need=need, uni=uni, dev=a))
 
@@ -199,7 +206,7 @@ baseline = next(r for r in rows if r['thr'] == THRS[len(THRS) // 2] and r['H'] =
 ranked = sorted([r for r in rows if r['dev']['n'] >= 40], key=lambda r: -r['dev']['cagr'] / max(r['dev']['mdd'], 5))
 print('GỐC (như bản trước, nhưng chấm điểm mỗi 4h):')
 for r in [baseline] + ranked[:5]:
-    r['final'] = run(r['thr'], r['H'], r['tp'], r['sl'], r['need'], MAJ12 if r['uni'] == '12' else MAJ20, SPLIT, end + 1)
+    r['final'] = run(r['thr'], r['H'], r['tp'], r['sl'], r['need'], UNIVERSES[r['uni']], SPLIT, end + 1)
 for k, r in enumerate([baseline] + ranked[:5]):
     if k == 1:
         print('\n5 BIẾN THỂ TỐT NHẤT Ở GIAI ĐOẠN CHỌN (lợi nhuận/rủi ro) → KIỂM TRA:')
