@@ -23,6 +23,8 @@ ap.add_argument('--pred', required=True)
 ap.add_argument('--out', default='ml-improve-results.json')
 ap.add_argument('--only', help='evaluate one variant: thr,H,tp,sl,need,uni (e.g. 0.25,12,0.04,0,0.06,20)')
 ap.add_argument('--context', action='store_true', help='with --only: split trades by macro context (needs macro.npz)')
+ap.add_argument('--cost', type=float, default=0.001, help='fee + slippage per side (0.001 = 0.1%%)')
+ap.add_argument('--show-trades', action='store_true', help='with --only: list best/worst trades and per-coin stats')
 ap.add_argument('--size', type=float, default=0.1, help='fraction of equity per position')
 ap.add_argument('--side', default='long', choices=['long', 'short'], help='short: sell after a pump instead of buying after a drop')
 ap.add_argument('--thr-mode', default='centered', choices=['centered', 'abs'],
@@ -39,7 +41,7 @@ P = np.stack([np.fromfile(D / f'P_{s}.bin', dtype=np.float64).reshape(n, 5) for 
 O, Hh, L, CL, FUND = (P[:, :, k] for k in range(5))
 p_dir = np.load(args.pred)['p_dir']
 SPLIT = np.datetime64('2025-01-01').astype('datetime64[ms]').astype(np.int64)
-COST = 0.0005 + 0.0005  # per side
+COST = args.cost  # fee + slippage per side
 MAJ12 = 'BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,LINKUSDT,AVAXUSDT,LTCUSDT,TRXUSDT,DOTUSDT'.split(',')
 MAJ20 = MAJ12 + 'BCHUSDT,ATOMUSDT,NEARUSDT,UNIUSDT,ETCUSDT,FILUSDT,APTUSDT,OPUSDT'.split(',')
 
@@ -56,6 +58,7 @@ SIDE = 1 if args.side == 'long' else -1
 
 
 trade_bars = []
+trade_log = []
 _last_trades = []
 
 
@@ -65,6 +68,7 @@ def run(thr, H, tp, sl, need_drop, universe, from_t, to_t):
     open_pos = {}  # coin -> dict(entry, exit_bar, size)
     trades = []
     trade_bars.clear()
+    trade_log.clear()
     curve = []
     for i in range(1, n - 1):
         if t[i] < from_t or t[i] >= to_t:
@@ -89,6 +93,7 @@ def run(thr, H, tp, sl, need_drop, universe, from_t, to_t):
                 eq += p['size'] * r
                 trades.append(r)
                 trade_bars.append(p['bar'])
+                trade_log.append((syms[c], str(np.datetime64(int(t[p['bar']]), 'ms'))[:16], r))
                 del open_pos[c]
             else:
                 if np.isfinite(FUND[c, i]):
@@ -121,7 +126,25 @@ if args.only:
     universe = MAJ12 if uni == '12' else MAJ20
     for name, a, b in [('chọn 2022–2024', start, SPLIT), ('kiểm tra 2025–nay', SPLIT, end + 1)]:
         r = run(float(thr), int(H), float(tp), float(sl), float(need), universe, a, b)
+        cv = r['curve']
+        yrs = {}
+        for tt, e in cv:
+            yrs.setdefault(str(np.datetime64(int(tt), 'ms'))[:4], []).append(e)
+        prev = 1.0
+        ys = []
+        for y_, es in yrs.items():
+            ys.append(f"{y_} {(es[-1] / prev - 1) * 100:+.0f}%")
+            prev = es[-1]
         print(f"{name}: {r['cagr']:6.1f}%/năm · sụt {r['mdd']:4.1f}% · {r['n']} lệnh · thắng {r['win']:.0f}% · TB {r['mean']:.2f}%/lệnh · t={r['t']:.1f}")
+        print('      theo năm: ' + ' · '.join(ys))
+        if args.show_trades:
+            lg = sorted(trade_log, key=lambda x: x[2])
+            print('      tệ nhất: ' + ', '.join(f'{a} {b} {r * 100:+.1f}%' for a, b, r in lg[:6]))
+            print('      tốt nhất: ' + ', '.join(f'{a} {b} {r * 100:+.1f}%' for a, b, r in lg[-6:]))
+            by = {}
+            for a, _, r in trade_log:
+                by.setdefault(a, []).append(r)
+            print('      theo coin: ' + ', '.join(f'{a[:-4]} {len(v)}×{np.mean(v) * 100:+.1f}%' for a, v in sorted(by.items(), key=lambda kv: -len(kv[1]))))
         if args.context:
             mz = np.load(D / 'macro.npz')
             M, mn = mz['M'], list(mz['names'])
