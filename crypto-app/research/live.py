@@ -68,12 +68,17 @@ HISTORY = HERE / 'live/history'
 RUN = {'candidates': [], 'signals': [], 'exits': []}  # what this run saw, appended to history/runs.jsonl
 
 
-def telegram(text):
-    data = urllib.parse.urlencode({'chat_id': cfg['telegram_chat_id'], 'text': text}).encode()
+def telegram(text, kb=None):
+    body = {'chat_id': cfg['telegram_chat_id'], 'text': text}
+    if kb:  # buttons under a buy signal: the runner records the answer (entered / skipped) in state.json
+        body['reply_markup'] = json.dumps({'inline_keyboard': [[{'text': '✅ Đã vào lệnh', 'callback_data': f'in|{kb}'},
+                                                               {'text': '❌ Bỏ qua', 'callback_data': f'skip|{kb}'}]]})
+    data = urllib.parse.urlencode(body).encode()
     urllib.request.urlopen(f"https://api.telegram.org/bot{cfg['telegram_token']}/sendMessage", data, timeout=30).read()
 
 
 def send(lines):
+    kb = lines.pop()['kb'] if lines and isinstance(lines[-1], dict) else None
     text = '\n'.join(lines)
     if args.replay:
         return
@@ -81,7 +86,7 @@ def send(lines):
     if args.dry_run or not cfg['telegram_token'] or not cfg['telegram_chat_id']:
         return
     try:
-        telegram(text)
+        telegram(text, kb)
     except Exception as e:  # noqa: BLE001 - never crash the run because Telegram is down: keep it for later
         print(f'(không gửi được Telegram, sẽ gửi lại khi có mạng: {e})')
         box = json.loads(OUTBOX.read_text(encoding='utf-8')) if OUTBOX.exists() else []
@@ -214,7 +219,8 @@ def step(st, i, live=True):
             p['fund'] = p.get('fund', 0.0) + (FUND[c, j] if np.isfinite(FUND[c, j]) else 0.0)
         p['checked'] = i
         # exits decided at the close of bar i: tell the user now, fill at the next open
-        quiet = p.get('missed')  # a signal missed while the bot was off: tracked for statistics only
+        # missed while the bot was off, or skipped by the user: tracked for statistics only, no reminders
+        quiet = p.get('missed') or p.get('user') == 'skipped'
         if done is None and p.get('entry') is not None and not quiet:
             if i + 1 >= sb + 1 + cfg['hold_bars']:
                 msgs.append([f"⏰ ĐÓNG LỆNH {p['symbol'][:-4]} NGAY (lệnh market)", f"Đã hết {cfg['hold_bars'] * 4}h giữ lệnh mà chưa chạm chốt lời.",
@@ -249,7 +255,7 @@ def step(st, i, live=True):
         order = np.argsort(-pr)
         for o in order:
             c, p = cand[o], float(pr[o])
-            full = sum(not q.get('missed') for q in st['open']) >= cfg['max_open']
+            full = sum(not q.get('missed') and q.get('user') != 'skipped' for q in st['open']) >= cfg['max_open']
             if live:
                 RUN['candidates'].append({'symbol': syms[c], 'drop24': round(float(det['drop24'][c, k]), 4), 'p': round(p, 4),
                                           'price': float(CL[c, i]), 'action': 'below_threshold' if p < cfg['threshold'] else 'full' if full else 'signal'})
@@ -271,7 +277,8 @@ def step(st, i, live=True):
                              f"• Giá lúc tín hiệu: {fmt(CL[c, i])} · BỎ QUA nếu giá đã trên {fmt(CL[c, i] * (1 + cfg['skip_if_above']))}",
                              f"• Đặt ngay lệnh limit chốt lời +{cfg['tp'] * 100:.0f}% so với giá khớp của bạn (≈{fmt(CL[c, i] * (1 + cfg['tp']))})",
                              f"• Không đặt cắt lỗ. Hạn chót đóng lệnh: {vn(pos['deadline_t'])} — bot sẽ nhắc, và báo sớm nếu thị trường sập",
-                             f"Đang mở {sum(not q.get('missed') for q in st['open'])}/{cfg['max_open']} lệnh."])
+                             f"Đang mở {sum(not q.get('missed') and q.get('user') != 'skipped' for q in st['open'])}/{cfg['max_open']} lệnh. Bấm nút bên dưới để bot biết bạn có vào không.",
+                             {'kb': f"{syms[c]}|{int(T[i])}"}])
     st['last_bar'] = int(T[i])
     return msgs
 

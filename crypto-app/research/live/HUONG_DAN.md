@@ -131,6 +131,10 @@ Nên chỉnh Windows để **máy không tự ngủ**: Settings → System → P
 5. Ngay sau khi khớp: đặt **lệnh Limit bán (Reduce Only)** ở giá **+4% so với giá khớp của bạn**.
 6. **Không đặt cắt lỗ.** Chiến lược đã được kiểm tra là cắt lỗ làm kết quả tệ hơn. Rủi ro được kiểm soát bằng cách chia nhỏ vốn và thoát theo tin nhắn ⏰ / ⚠️ của bot.
 
+7. Bấm nút dưới tin nhắn: **✅ Đã vào lệnh** hoặc **❌ Bỏ qua**. Lệnh bỏ qua thì bot không nhắc đóng, không tính vào kết quả và không chiếm chỗ trong giới hạn 10 lệnh. Bot ghi nhận trong vòng 10 phút.
+
+Mỗi **tối Chủ nhật (sau 20:00)**, bot tự gửi tổng kết tuần.
+
 Khi nhận ⏰ hoặc ⚠️ **ĐÓNG LỆNH NGAY**: hủy lệnh limit chốt lời, rồi đóng vị thế bằng lệnh Market.
 
 ## 6. Theo dõi kết quả

@@ -88,6 +88,19 @@ def cfg_get():
     return json.loads((LIVE / 'config.json').read_text(encoding='utf-8')) if (LIVE / 'config.json').exists() else {}
 
 
+def report_text(st, cfg, since=0):
+    closed = [c for c in st['closed'] if not c.get('missed') and c.get('user') != 'skipped' and c.get('exit_t', 0) >= since]
+    real_open = [p for p in st['open'] if not p.get('missed') and p.get('user') != 'skipped']
+    if not closed:
+        return f'Chưa có lệnh nào đóng{" trong tuần" if since else ""}. Đang mở: {len(real_open)} lệnh.'
+    rets = [c['ret'] for c in closed]
+    eq = 1.0
+    for c in closed:
+        eq *= 1 + c['ret'] * c['size']
+    return (f"{len(closed)} lệnh đã đóng · thắng {sum(x > 0 for x in rets) / len(rets) * 100:.0f}% · lãi TB {sum(rets) / len(rets) * 100:+.2f}%/lệnh\n"
+            f"Tổng trên vốn: {(eq - 1) * 100:+.1f}% ({(eq - 1) * cfg.get('capital_usdt', 1000):+.0f}$) · đang mở: {len(real_open)} lệnh")
+
+
 def answer_commands(rs):
     """Reply to /baocao, /lenh, /trangthai sent to the bot on Telegram (checked at every 10-minute start)."""
     cfg = cfg_get()
@@ -105,24 +118,32 @@ def answer_commands(rs):
     except Exception:  # noqa: BLE001 - offline: try again next time
         return
     st = json.loads((LIVE / 'state.json').read_text(encoding='utf-8')) if (LIVE / 'state.json').exists() else {'open': [], 'closed': [], 'last_bar': 0}
+    changed = False
     for u in r.get('result', []):
         rs['update_offset'] = u['update_id'] + 1
+        cq = u.get('callback_query')
+        if cq and str(cq.get('message', {}).get('chat', {}).get('id')) == chat:
+            # button under a buy signal: remember whether the user really took the trade
+            act, sym, t0 = (cq.get('data') or '||').split('|')[:3]
+            hit = next((p for p in st['open'] + st['closed'] if p['symbol'] == sym and str(p['signal_t']) == t0), None)
+            if hit:
+                hit['user'] = 'entered' if act == 'in' else 'skipped'
+                changed = True
+            note = ('Đã ghi: bạn ĐÃ VÀO ' if act == 'in' else 'Đã ghi: bạn BỎ QUA ') + sym[:-4] + ('' if hit else ' (không tìm thấy lệnh)')
+            try:
+                urllib.request.urlopen(api + '/answerCallbackQuery', urllib.parse.urlencode({'callback_query_id': cq['id'], 'text': note}).encode(), timeout=20).read()
+            except Exception:  # noqa: BLE001
+                pass
+            telegram('✍️ ' + note + ('. Bot sẽ không nhắc đóng lệnh này nữa.' if act != 'in' else '. Bot sẽ nhắc khi cần đóng.'))
+            continue
         msg = u.get('message') or {}
         if str(msg.get('chat', {}).get('id')) != chat:
             continue  # only the owner may ask
         cmd = (msg.get('text') or '').strip().lower().split('@')[0]
-        real_open = [p for p in st['open'] if not p.get('missed')]
+        real_open = [p for p in st['open'] if not p.get('missed') and p.get('user') != 'skipped']
         closed = [c for c in st['closed'] if not c.get('missed')]
         if cmd in ('/baocao', 'baocao', 'báo cáo'):
-            if closed:
-                rets = [c['ret'] for c in closed]
-                eq = 1.0
-                for c in closed:
-                    eq *= 1 + c['ret'] * c['size']
-                text = (f"📊 {len(closed)} lệnh đã đóng · thắng {sum(x > 0 for x in rets) / len(rets) * 100:.0f}% · lãi TB {sum(rets) / len(rets) * 100:+.2f}%/lệnh\n"
-                        f"Tổng trên vốn: {(eq - 1) * 100:+.1f}% ({(eq - 1) * cfg.get('capital_usdt', 1000):+.0f}$)\nĐang mở: {len(real_open)} lệnh")
-            else:
-                text = f'📊 Chưa có lệnh nào đóng. Đang mở: {len(real_open)} lệnh.'
+            text = '📊 ' + report_text(st, cfg)
         elif cmd in ('/lenh', 'lenh', 'lệnh'):
             text = '📂 Lệnh đang mở:\n' + '\n'.join(
                 f"• {p['symbol'][:-4]}: vào {p.get('entry') or p.get('signal_close'):.6g}, chốt lời {(p.get('tp_price') or (p.get('entry') or p['signal_close']) * 1.04):.6g}, hạn {vn(p['deadline_t'] / 1000)}"
@@ -135,6 +156,14 @@ def answer_commands(rs):
         else:
             continue
         telegram(text)
+    if changed:
+        (LIVE / 'state.json').write_text(json.dumps(st, indent=1), encoding='utf-8')
+    # weekly summary: Sunday evening (Vietnam time), once per week
+    vn_now = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=7)
+    week = vn_now.strftime('%G-%V')
+    if vn_now.weekday() == 6 and vn_now.hour >= 20 and rs.get('weekly_sent') != week:
+        if telegram('🗓 Tổng kết tuần\n' + report_text(st, cfg, since=(now() - 7 * 86400) * 1000) + '\n\nTừ đầu: ' + report_text(st, cfg)):
+            rs['weekly_sent'] = week
 
 
 def refresh_dashboard():

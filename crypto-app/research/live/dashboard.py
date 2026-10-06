@@ -74,7 +74,8 @@ def build():
     st = load(LIVE / 'state.json', {'last_bar': 0, 'open': [], 'closed': []})
     rs = load(LIVE / 'history/runner.json', {})
     runs = runs_tail()
-    real_open = [p for p in st.get('open', []) if not p.get('missed')]
+    real_open = [p for p in st.get('open', []) if not p.get('missed') and p.get('user') != 'skipped']
+    skipped = len([p for p in st.get('open', []) + st.get('closed', []) if p.get('user') == 'skipped'])
     prices, data_close = last_prices({p['symbol'] for p in real_open})
     now = now_ms()
 
@@ -94,7 +95,7 @@ def build():
 
     # ---------- closed trades ----------
     closed = sorted(st.get('closed', []), key=lambda c: c.get('exit_t', 0))
-    real_closed = [c for c in closed if not c.get('missed')]
+    real_closed = [c for c in closed if not c.get('missed') and c.get('user') != 'skipped']
     rets = np.array([c['ret'] for c in real_closed]) if real_closed else np.array([])
     eq, curve = 1.0, []
     months = {}
@@ -136,10 +137,10 @@ def build():
         rows.append(f"<tr><td><b>{esc(p['symbol'][:-4])}</b></td><td>{vn(p['signal_t'] + BAR)}</td><td>{entry:.6g}</td>"
                     f"<td>{tp:.6g}</td><td>{cur:.6g}</td><td class=\"{'pos' if (pnl or 0) >= 0 else 'neg'}\">{pnl:+.1f}%</td>"
                     f"<td>{p['size'] * 100:.0f}% · {p['size'] * cfg['capital_usdt']:.0f}$</td>"
-                    f"<td>{'quá hạn: đóng ngay' if left_h <= 0 else f'{left_h:.0f} giờ'}</td></tr>" if cur and entry else
-                    f"<tr><td><b>{esc(p['symbol'][:-4])}</b></td><td>{vn(p['signal_t'] + BAR)}</td><td colspan=6>đang chờ giá…</td></tr>")
+                    f"<td>{'quá hạn: đóng ngay' if left_h <= 0 else f'{left_h:.0f} giờ'}</td><td>{'✅ đã vào' if p.get('user') == 'entered' else '<span class=muted>chưa bấm</span>'}</td></tr>" if cur and entry else
+                    f"<tr><td><b>{esc(p['symbol'][:-4])}</b></td><td>{vn(p['signal_t'] + BAR)}</td><td colspan=7>đang chờ giá…</td></tr>")
     open_html = ('<table><thead><tr><th>Coin</th><th>Tín hiệu</th><th>Giá vào</th><th>Chốt lời</th><th>Giá hiện tại</th>'
-                 '<th>Lãi/lỗ</th><th>Vốn</th><th>Còn lại</th></tr></thead><tbody>' + ''.join(rows) + '</tbody></table>'
+                 '<th>Lãi/lỗ</th><th>Vốn</th><th>Còn lại</th><th>Bạn</th></tr></thead><tbody>' + ''.join(rows) + '</tbody></table>'
                  if rows else '<p class="muted">Không có lệnh nào đang mở. Bot chờ cú bán tháo tiếp theo.</p>')
 
     # ---------- closed table ----------
@@ -203,7 +204,7 @@ ul{{margin:6px 0;padding-left:18px}}li{{color:var(--muted);font-size:13px}}
 <p class="muted">Cập nhật {vn(now)} · trang tự làm mới mỗi 5 phút · vốn khai báo {cfg['capital_usdt']:.0f}$</p>
 <div class="card"><span class="pill {tone}">{health}</span>
 <p class="muted">Nến đã xử lý gần nhất: {vn(st['last_bar'] + BAR) if st.get('last_bar') else '–'} · lần chạy thành công gần nhất: {vn(last_ok * 1000) if last_ok else '–'}
-· tín hiệu bị lỡ (máy tắt / mất mạng): {missed}</p>{'<ul>' + fail_html + '</ul>' if fail_html and tone != 'good' else ''}</div>
+· tín hiệu bị lỡ (máy tắt / mất mạng): {missed} · bạn bỏ qua: {skipped}</p>{'<ul>' + fail_html + '</ul>' if fail_html and tone != 'good' else ''}</div>
 <div class="stats" style="margin-top:14px">{stats}</div>
 <div class="card"><h2>Lệnh đang mở ({len(real_open)}/{cfg.get('max_open', 10)})</h2>{open_html}
 <p class="muted">Đóng ngay bằng lệnh Market khi Telegram báo ⏰ / ⚠️, hoặc khi cột "Còn lại" ghi quá hạn.</p></div>
