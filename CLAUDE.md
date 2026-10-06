@@ -33,6 +33,7 @@ Nhánh làm việc: `claude/charming-fermat-jjwcz7`. Toàn bộ nghiên cứu n�
 - Dữ liệu vĩ mô (S&P, VIX, DXY, FOMC, Wikipedia) và nguồn mới (premium index, Coinbase premium, DVOL, sổ lệnh, stablecoin): mô hình bám vào biến chậm, bị overfit theo giai đoạn.
 - Nến 1h, chiều short sau khi coin bị bơm, cắt lỗ cứng, thoát khi BTC sập, giới hạn số lệnh / lệnh mới mỗi nến.
 - Chia vốn theo biến động, ngưỡng theo thứ hạng, để mô hình tự chọn TP / thời gian giữ, ghép mô hình khác cấu hình.
+- "Đặt xong là quên" (chỉ đặt TP +4% và SL trên Binance, giữ tối đa 30 ngày, không có thoát 48h / thị trường sập): mọi mức SL đều tệ hơn rất nhiều. Không SL: 2022–2024 +36%/năm, sụt 49%. SL theo biến động (`--sl-vol` 2–6) hoặc cố định 25%: sụt 60–72%. Còn đóng lệnh trễ tới 12–24h so với giờ bot nhắc thì gần như không ảnh hưởng (+54% / +53%/năm, sụt 29–30%), nên người dùng chỉ cần xem Telegram khoảng 2 lần mỗi ngày.
 - Vào lệnh bằng LIMIT thấp hơn 1–2% (hủy sau 4h): `ml_improve.py --limit-entry` trông tốt hơn nhưng đó là ảo do engine biết trước lệnh nào khớp. Replay bằng bot (thực tế) cho kết quả kém hơn market: 2022–2024 +55.2% so với +57.4%/năm; 2025–nay +23.5% so với +26.5%. Bot vẫn có tùy chọn `limit_entry` nhưng mặc định tắt.
 
 **Có lợi thế nhỏ:**
