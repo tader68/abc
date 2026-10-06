@@ -1,0 +1,8 @@
+{
+  "telegram_token": "DÁN_TOKEN_BOT_TELEGRAM_VÀO_ĐÂY",
+  "telegram_chat_id": "DÁN_CHAT_ID_VÀO_ĐÂY",
+  "capital_usdt": 1000,
+  "size": 0.10,
+  "threshold": 0.90,
+  "max_open": 10
+}

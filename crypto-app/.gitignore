@@ -40,3 +40,8 @@ __pycache__/
 replicate-results.json
 replicate2-results.json
 ml-improve-results.json
+
+# live signal bot: personal settings, state and logs
+research/live/config.json
+research/live/state.json
+research/live/log.txt

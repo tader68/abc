@@ -25,7 +25,8 @@ from pathlib import Path
 
 import lightgbm as lgb
 import numpy as np
-from numpy.lib.stride_tricks import sliding_window_view
+
+from event_features import context, detect
 
 ap = argparse.ArgumentParser()
 ap.add_argument('--dir', default=str(Path(__file__).parent / '.cache/ml/panel_4h'))
@@ -44,7 +45,8 @@ ap.add_argument('--subsample', type=int, default=1, help='train on every k-th ev
 ap.add_argument('--ext', action='store_true', help='add premium index, Coinbase premium, DVOL, BTC order book and stablecoin features from <dir>/ext.npz')
 ap.add_argument('--ext-drop', default='', help='comma list of ext feature names to leave out (e.g. slow regime variables)')
 ap.add_argument('--seed', type=int, default=0)
-ap.add_argument('--save', required=True)
+ap.add_argument('--save', help='walk-forward predictions file (research mode)')
+ap.add_argument('--final', help='train ONE model on every event so far and save it in this folder (for the live bot)')
 args = ap.parse_args()
 
 D = Path(args.dir)
@@ -58,21 +60,12 @@ P = np.stack([np.fromfile(D / f'P_{s}.bin', dtype=np.float64).reshape(n, 5) for 
 O, Hh, L, CL, FUND = (P[:, :, k] for k in range(5))
 
 
-def roll(a, w, fn):
-    out = np.full_like(a, np.nan)
-    with np.errstate(invalid='ignore'), __import__('warnings').catch_warnings():
-        __import__('warnings').simplefilter('ignore')
-        out[:, w - 1 :] = fn(sliding_window_view(a, w, axis=1), axis=2)
-    return out
-
-
 BPD = args.bars_per_day
 K8 = max(1, BPD // 3)  # bars in 8 hours
-hi6, lo6, hi18 = roll(Hh, BPD + 1, np.nanmax), roll(L, BPD + 1, np.nanmin), roll(Hh, 3 * BPD + 1, np.nanmax)
-drop24 = CL / hi6 - 1  # <= 0
-rise24 = CL / lo6 - 1  # >= 0
-move = drop24 if S > 0 else rise24
-event = (move <= -args.event) if S > 0 else (move >= args.event)
+det = detect(Hh, L, CL, S, args.event, BPD)
+event = det['event']
+
+
 def xcol(nm):
     out = np.full((C, n), np.nan, dtype=np.float32)
     k = names.index(nm)
@@ -98,49 +91,7 @@ if args.event_type == 'any':
 event &= np.isfinite(O[:, np.r_[1:n, n - 1]])
 
 # --- event context features (all known at the close of bar i) ---
-lr = np.log(CL)
-r1 = np.full_like(CL, np.nan)
-r1[:, 1:] = lr[:, 1:] - lr[:, :-1]
-def roll_std(a, w):
-    """Rolling std ignoring NaN, via cumulative sums (memory-light for long 1h panels)."""
-    f = np.isfinite(a)
-    x = np.where(f, a, 0.0)
-    cs = lambda v: np.concatenate([np.zeros((v.shape[0], 1)), np.cumsum(v, axis=1)], axis=1)  # noqa: E731
-    k, s1, s2 = cs(f.astype(float)), cs(x), cs(x * x)
-    k, s1, s2 = (z[:, w:] - z[:, :-w] for z in (k, s1, s2))
-    out = np.full_like(a, np.nan)
-    with np.errstate(invalid='ignore', divide='ignore'):
-        out[:, w - 1 :] = np.where(k > 1, np.sqrt(np.maximum(s2 / k - (s1 / k) ** 2, 0)), np.nan)
-    return out
-
-
-vol30 = roll_std(r1, 30 * BPD)  # 30-day realised per-bar volatility
-btc = syms.index('BTCUSDT')
-with np.errstate(invalid='ignore'):
-    med_drop = np.nanmedian(drop24, axis=0)
-    med_rise = np.nanmedian(rise24, axis=0)
-    breadth_dn = np.nanmean(drop24 <= -0.05, axis=0)
-    breadth_up = np.nanmean(rise24 >= 0.05, axis=0)
-since = np.full((C, n), np.nan)
-for c in range(C):
-    last = -10**9
-    for i in range(n):
-        since[c, i] = min(i - last, 1000 * BPD // 6) / BPD
-        if event[c, i]:
-            last = i
-r_last = np.full_like(CL, np.nan)
-r_last[:, K8:] = lr[:, K8:] - lr[:, :-K8]
-ctx = {
-    'drop24': drop24, 'rise24': rise24, 'drop72': CL / hi18 - 1,
-    'ret_4h': r1, 'ret_8h': r_last,
-    'move_sigma': move / (vol30 * np.sqrt(BPD)), 'vol30': vol30,
-    'btc_drop24': np.broadcast_to(drop24[btc], (C, n)), 'btc_rise24': np.broadcast_to(rise24[btc], (C, n)),
-    'med_drop24': np.broadcast_to(med_drop, (C, n)), 'med_rise24': np.broadcast_to(med_rise, (C, n)),
-    'rel_move': move - np.broadcast_to(med_drop if S > 0 else med_rise, (C, n)),
-    'breadth_dn': np.broadcast_to(breadth_dn, (C, n)), 'breadth_up': np.broadcast_to(breadth_up, (C, n)),
-    'funding': FUND, 'days_since_event': since,
-    'bounce_from_low': CL / lo6 - 1 if S > 0 else CL / hi6 - 1,
-}
+ctx = context(det, CL, FUND, syms, event, S, BPD)
 if args.event_type == 'any':
     ctx.update({k: v.astype(np.float32) for k, v in kinds.items()})
 ctx_names = list(ctx)
@@ -207,6 +158,22 @@ months = np.unique(month[ii])
 test_months = [m for m in months if m >= np.datetime64('2022-02')]
 params = dict(objective='binary' if args.target == 'win' else 'huber', alpha=0.05, learning_rate=0.03, num_leaves=15, min_data_in_leaf=200, feature_fraction=0.5,
               bagging_fraction=0.7, bagging_freq=1, lambda_l2=10.0, verbose=-1, num_threads=4, seed=args.seed)
+if args.final:
+    if args.event_type != 'drop' or args.side != 'long' or args.ext or args.context_only or args.target != 'win':
+        raise SystemExit('--final chỉ hỗ trợ cấu hình dùng cho bot: sự kiện rơi giá, long, không --ext, mục tiêu thắng/thua')
+    out = Path(args.final)
+    out.mkdir(parents=True, exist_ok=True)
+    tr = np.arange(len(ci))[:: args.subsample]
+    mdl = lgb.train(params, lgb.Dataset(Xe[tr], ytrain[tr]), 300)
+    mdl.save_model(str(out / f'event_seed{args.seed}.txt'))
+    (out / 'meta.json').write_text(json.dumps({
+        'features': fnames, 'panel_features': names, 'context_features': ctx_names, 'event': args.event, 'tp': args.tp,
+        'hold_bars': args.hold, 'bars_per_day': BPD, 'trained_until': str(np.datetime64(int(t[ii.max()]), 'ms')),
+        'samples': int(len(tr)), 'base_win_rate': float(y.mean()), 'symbols': syms}, indent=1))
+    print(f'Đã lưu mô hình seed {args.seed} ({len(tr):,} sự kiện, đến {np.datetime64(int(t[ii.max()]), "ms")}) → {out}')
+    raise SystemExit
+if not args.save:
+    raise SystemExit('cần --save (nghiên cứu) hoặc --final (bot)')
 p = np.full(len(ci), np.nan)
 imp = np.zeros(len(fnames))
 t0 = time.time()

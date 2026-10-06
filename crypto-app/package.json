@@ -25,6 +25,8 @@
     "ml": "python3 research/ml_model.py",
     "ml:improve": "python3 research/ml_improve.py",
     "ml:macro": "python3 research/macro.py",
+    "live": "node research/live_export.js && python3 research/live.py",
+    "live:report": "python3 research/live.py --report",
     "research": "node research/run.js",
     "research:test": "node --test research/*.test.js"
   },

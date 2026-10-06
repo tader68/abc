@@ -86,3 +86,13 @@ Thử hàng nghìn luật thì chắc chắn sẽ có luật trông rất đẹp
 | `python3 research/extdata.py` rồi `ml_event.py --ext [--ext-drop ...]` | **Nguồn dữ liệu mới (10/2026):** premium index từng coin, Coinbase premium, DVOL (Deribit), sổ lệnh BTC ±1/2/5% (2023+), tổng cung stablecoin. So với cùng 5 seed không có dữ liệu mới (ngưỡng 0.9): **đủ 18 chỉ báo → tệ hơn** (2025–nay +23.6%/năm, sụt 10.9% so với +26.9%, sụt 3.5%); mô hình bám vào biến chậm (mức DVOL, stablecoin) như từng xảy ra với dữ liệu vĩ mô. **Chỉ các biến nhanh** (`--ext-drop dvol_btc,dvol_eth,stables_chg7,stables_chg30`) → ngang bằng (2022–2024 +53.1%, sụt 24.8%; 2025–nay +25.3%, sụt 3.1%), nằm trong mức dao động giữa các nhóm seed, nên không giữ. |
 | `--idle-carry 1` | Cho phần vốn đang để không chạy funding carry BTC/ETH (spot long + perp short, trừ 1%/năm chi phí): +4%/năm ở 2022–2024, +1.3%/năm ở 2025–nay, mức sụt không đổi. Ước tính lạc quan vì giả định chuyển vốn qua lại tức thì. |
 
+## Bot tín hiệu (chạy thật)
+
+Hướng dẫn cài đặt chi tiết bằng tiếng Việt: [`research/live/HUONG_DAN.md`](live/HUONG_DAN.md).
+
+- `research/live/models/`: 10 mô hình sự kiện huấn luyện trên toàn bộ dữ liệu (`ml_event.py --final`), kèm `meta.json` (danh sách chỉ báo, coin, ngày huấn luyện).
+- `research/live_export.js`: tải 1500 nến 4h gần nhất của từng coin từ fapi.binance.com cùng funding, tính đúng các chỉ báo như lúc huấn luyện (đã kiểm tra: 99.9% thứ hạng chỉ báo trùng với panel huấn luyện).
+- `research/live.py`: theo dõi lệnh mở (chốt lời +4%, hết 48h, thị trường rơi thêm 5%), tìm tín hiệu mới (rơi ≥6%/24h, xác suất trung bình ≥90%, tối đa 10 lệnh, 10–20% vốn mỗi lệnh), gửi Telegram và ghi `state.json` để so kết quả thật với backtest. `--dry-run`, `--replay N`, `--report`.
+- `research/event_features.py`: phần phát hiện sự kiện và chỉ báo bối cảnh dùng chung cho huấn luyện và bot (tái tạo đúng kết quả cũ, sai số 0).
+- Windows: `research/live/run_live.bat`, `install_task.bat` (Task Scheduler mỗi 4h và khi đăng nhập), `retrain.bat`. Mac/Linux: `run_live.sh` + cron.
+
