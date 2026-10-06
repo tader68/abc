@@ -193,6 +193,7 @@ else:
 if args.ext:
     ez = np.load(D / 'ext.npz')
     Xx = np.concatenate([ez['coin'][ci, ii], ez['market'][ii]], axis=1).astype(np.float32)
+    Xx[~np.isfinite(Xx)] = np.nan
     Xe = np.concatenate([Xe, Xx], axis=1)
     fnames = fnames + [f'ext_{k}' for k in ez['coin_names']] + [f'ext_{k}' for k in ez['market_names']]
     print(f'+ {Xx.shape[1]} chỉ báo từ nguồn dữ liệu mới')
