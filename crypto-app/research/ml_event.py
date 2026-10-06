@@ -42,6 +42,7 @@ ap.add_argument('--placebo', action='store_true', help='shuffle labels across ev
 ap.add_argument('--bars-per-day', type=int, default=6, help='6 for 4h candles, 24 for 1h')
 ap.add_argument('--subsample', type=int, default=1, help='train on every k-th event (consecutive 1h events are near-duplicates)')
 ap.add_argument('--ext', action='store_true', help='add premium index, Coinbase premium, DVOL, BTC order book and stablecoin features from <dir>/ext.npz')
+ap.add_argument('--ext-drop', default='', help='comma list of ext feature names to leave out (e.g. slow regime variables)')
 ap.add_argument('--seed', type=int, default=0)
 ap.add_argument('--save', required=True)
 args = ap.parse_args()
@@ -194,6 +195,10 @@ if args.ext:
     ez = np.load(D / 'ext.npz')
     Xx = np.concatenate([ez['coin'][ci, ii], ez['market'][ii]], axis=1).astype(np.float32)
     Xx[~np.isfinite(Xx)] = np.nan
+    en = [str(k) for k in ez['coin_names']] + [str(k) for k in ez['market_names']]
+    keep = [k for k, nm in enumerate(en) if nm not in set(args.ext_drop.split(','))]
+    Xx = Xx[:, keep]
+    ez = {'coin_names': [en[k] for k in keep], 'market_names': []}
     Xe = np.concatenate([Xe, Xx], axis=1)
     fnames = fnames + [f'ext_{k}' for k in ez['coin_names']] + [f'ext_{k}' for k in ez['market_names']]
     print(f'+ {Xx.shape[1]} chỉ báo từ nguồn dữ liệu mới')
