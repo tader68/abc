@@ -33,6 +33,8 @@ ap.add_argument('--min-age-days', type=float, default=0, help='only trade coins 
 ap.add_argument('--tp-frac', type=float, default=0, help='partial take-profit: close this fraction at the take-profit, let the rest run')
 ap.add_argument('--tp2', type=float, default=0, help='second take-profit for the remainder (0 = hold it until the time / market exit)')
 ap.add_argument('--bars-per-day', type=int, default=6, help='6 for 4h candles, 24 for 1h')
+ap.add_argument('--max-new', type=int, default=0, help='at most this many new positions per bar (spreads entries through a crash cascade)')
+ap.add_argument('--vol-size', action='store_true', help='scale each position by (median coin volatility / this coin volatility), clipped to 0.5-1.5')
 ap.add_argument('--size', type=float, default=0.1, help='fraction of equity per position')
 ap.add_argument('--side', default='long', choices=['long', 'short'], help='short: sell after a pump instead of buying after a drop')
 ap.add_argument('--thr-mode', default='centered', choices=['centered', 'abs'],
@@ -75,6 +77,18 @@ SIDE = 1 if args.side == 'long' else -1
 
 
 FIRST = np.argmax(np.isfinite(CL), axis=1)  # first bar each coin traded
+with np.errstate(invalid='ignore', divide='ignore'):
+    _lr = np.full((C, n), np.nan)
+    _lr[:, 1:] = np.log(CL[:, 1:] / CL[:, :-1])
+    _f = np.isfinite(_lr)
+    _x = np.where(_f, _lr, 0.0)
+    _cs = lambda v: np.concatenate([np.zeros((C, 1)), np.cumsum(v, axis=1)], axis=1)  # noqa: E731
+    _w = 30 * BPD
+    _k, _s1, _s2 = ((z[:, _w:] - z[:, :-_w]) for z in (_cs(_f.astype(float)), _cs(_x), _cs(_x * _x)))
+    VOL = np.full((C, n), np.nan)
+    VOL[:, _w - 1 :] = np.where(_k > 20, np.sqrt(np.maximum(_s2 / _k - (_s1 / _k) ** 2, 0)), np.nan)
+    VOLMULT = np.clip(np.nanmedian(VOL, axis=0)[None, :] / VOL, 0.5, 1.5)
+    VOLMULT[~np.isfinite(VOLMULT)] = 1.0
 trade_bars = []
 trade_log = []
 _last_trades = []
@@ -143,11 +157,13 @@ def run(thr, H, tp, sl, need_drop, universe, from_t, to_t):
             ok &= (i - FIRST) >= args.min_age_days * args.bars_per_day
         if need_drop:
             ok &= (drop24[:, i] <= -need_drop) if SIDE > 0 else (rise24[:, i] >= need_drop)
-        for c in np.where(ok)[0]:
+        for c in sorted(np.where(ok)[0], key=lambda k: -edge[k]):  # strongest signals first when slots are scarce
+            if args.max_new and sum(1 for q in open_pos.values() if q['bar'] == i) >= args.max_new:
+                break
             if c in open_pos or len(open_pos) >= (args.max_open or max(1, int(round(1 / args.size)))):
                 continue
             ptp, pH = (PLAN_TP[c, i], int(PLAN_H[c, i])) if PLAN_TP is not None else (tp, H)
-            open_pos[c] = dict(tp=ptp, entry=O[c, i + 1] * (1 + SIDE * 0.0002), exit_bar=i + 1 + pH, size=args.size * eq * (1 + args.conf_size * (pr[c] - thr) / (1 - thr) if args.conf_size and args.thr_mode == 'abs' else 1), fund=0.0, bar=i, part=False, booked=0.0, left=1.0)
+            open_pos[c] = dict(tp=ptp, entry=O[c, i + 1] * (1 + SIDE * 0.0002), exit_bar=i + 1 + pH, size=args.size * eq * (1 + args.conf_size * (pr[c] - thr) / (1 - thr) if args.conf_size and args.thr_mode == 'abs' else 1) * (VOLMULT[c, i] if args.vol_size else 1), fund=0.0, bar=i, part=False, booked=0.0, left=1.0)
         peak = max(peak, eq)
         mdd = max(mdd, 1 - eq / peak)
         curve.append((t[i], eq))
