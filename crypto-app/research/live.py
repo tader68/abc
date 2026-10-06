@@ -42,6 +42,7 @@ ap.add_argument('--state', default=str(HERE / 'live/state.json'))
 ap.add_argument('--dry-run', action='store_true')
 ap.add_argument('--replay', type=int, default=0, help='test: step through the last N candles with a scratch state, no Telegram')
 ap.add_argument('--report', action='store_true')
+ap.add_argument('--flush-only', action='store_true', help='only resend Telegram messages that failed earlier (no network)')
 ap.add_argument('--asof', type=int, default=0, help='test: pretend the panel ends at this bar index')
 args = ap.parse_args()
 
@@ -62,6 +63,16 @@ def fmt(x):
     return f'{x:.6g}'
 
 
+OUTBOX = HERE / 'live/outbox.json'
+HISTORY = HERE / 'live/history'
+RUN = {'candidates': [], 'signals': [], 'exits': []}  # what this run saw, appended to history/runs.jsonl
+
+
+def telegram(text):
+    data = urllib.parse.urlencode({'chat_id': cfg['telegram_chat_id'], 'text': text}).encode()
+    urllib.request.urlopen(f"https://api.telegram.org/bot{cfg['telegram_token']}/sendMessage", data, timeout=30).read()
+
+
 def send(lines):
     text = '\n'.join(lines)
     if args.replay:
@@ -69,11 +80,41 @@ def send(lines):
     print(text + '\n')
     if args.dry_run or not cfg['telegram_token'] or not cfg['telegram_chat_id']:
         return
-    data = urllib.parse.urlencode({'chat_id': cfg['telegram_chat_id'], 'text': text}).encode()
     try:
-        urllib.request.urlopen(f"https://api.telegram.org/bot{cfg['telegram_token']}/sendMessage", data, timeout=30).read()
-    except Exception as e:  # noqa: BLE001 - never crash the run because Telegram is down
-        print(f'(không gửi được Telegram: {e})')
+        telegram(text)
+    except Exception as e:  # noqa: BLE001 - never crash the run because Telegram is down: keep it for later
+        print(f'(không gửi được Telegram, sẽ gửi lại khi có mạng: {e})')
+        box = json.loads(OUTBOX.read_text(encoding='utf-8')) if OUTBOX.exists() else []
+        box.append({'t': int(dt.datetime.now(dt.timezone.utc).timestamp() * 1000), 'text': text})
+        OUTBOX.write_text(json.dumps(box, ensure_ascii=False, indent=1), encoding='utf-8')
+
+
+def flush_outbox():
+    """Resend messages that could not be delivered. A late 'buy now' is dangerous, so stale buy signals are replaced
+    by a short note; exit reminders are still useful and are delivered marked as late."""
+    if not OUTBOX.exists() or args.dry_run or not cfg['telegram_token']:
+        return
+    box = json.loads(OUTBOX.read_text(encoding='utf-8'))
+    now = dt.datetime.now(dt.timezone.utc).timestamp() * 1000
+    left = []
+    for m in box:
+        age_min = (now - m['t']) / 60000
+        text = m['text']
+        if text.startswith('🟢') and age_min > 60:
+            text = f"⌛ Tín hiệu MUA lúc {vn(m['t'])} không gửi được kịp (mất mạng) → đã quá hạn, BỎ QUA:\n" + text.splitlines()[0]
+        elif age_min > 10:
+            text = f'(gửi trễ, tin lúc {vn(m["t"])})\n' + text
+        if age_min > 48 * 60:
+            continue
+        try:
+            telegram(text)
+        except Exception:  # noqa: BLE001 - still offline: keep everything for the next run
+            left = box[box.index(m):]
+            break
+    if left:
+        OUTBOX.write_text(json.dumps(left, ensure_ascii=False, indent=1), encoding='utf-8')
+    else:
+        OUTBOX.unlink()
 
 
 def load_state(path):
@@ -188,6 +229,7 @@ def step(st, i, live=True):
             ret = (px / p['entry'] - 1) - 2 * COST - p.get('fund', 0.0)
             p.update(exit_t=int(T[j]), exit_price=float(px), reason=why, ret=float(ret))
             st['closed'].append(p)
+            RUN['exits'].append({'symbol': p['symbol'], 'reason': why, 'ret': round(float(ret), 4), 'missed': bool(p.get('missed'))})
             if quiet:
                 pass
             elif why == 'tp':
@@ -207,7 +249,11 @@ def step(st, i, live=True):
         order = np.argsort(-pr)
         for o in order:
             c, p = cand[o], float(pr[o])
-            if p < cfg['threshold'] or sum(not q.get('missed') for q in st['open']) >= cfg['max_open']:
+            full = sum(not q.get('missed') for q in st['open']) >= cfg['max_open']
+            if live:
+                RUN['candidates'].append({'symbol': syms[c], 'drop24': round(float(det['drop24'][c, k]), 4), 'p': round(p, 4),
+                                          'price': float(CL[c, i]), 'action': 'below_threshold' if p < cfg['threshold'] else 'full' if full else 'signal'})
+            if p < cfg['threshold'] or full:
                 continue
             frac = cfg['size'] * (1 + cfg['conf_size'] * (p - cfg['threshold']) / (1 - cfg['threshold']))
             pos = dict(symbol=syms[c], signal_t=int(T[i]), signal_close=float(CL[c, i]), p=p, size=frac, entry=None, checked=i,
@@ -217,6 +263,7 @@ def step(st, i, live=True):
                 st['missed'] = st.get('missed', 0) + 1
             st['open'].append(pos)
             if live:
+                RUN['signals'].append({'symbol': syms[c], 'p': round(p, 4), 'size': round(frac, 4), 'price': float(CL[c, i])})
                 usdt = frac * cfg['capital_usdt']
                 msgs.append([f"🟢 MUA {syms[c][:-4]} (futures USDT-M, long)",
                              f"Coin vừa rơi {-det['drop24'][c, k] * 100:.1f}% trong 24h · 10 mô hình: xác suất thắng {p * 100:.0f}%",
@@ -239,31 +286,40 @@ if args.replay:
     print('\n'.join(report(st)))
     raise SystemExit
 
+flush_outbox()
+if args.flush_only:
+    raise SystemExit
 st = load_state(args.state)
 i_last = n - 1
 age_h = (dt.datetime.now(dt.timezone.utc).timestamp() * 1000 - (T[i_last] + BAR)) / 3.6e6
 if age_h > 6 and not args.asof:
     # never act on old candles: a 'buy now' on yesterday's price would be wrong. Keep the state untouched so the
-    # bars are processed (as missed signals / exits) once fresh data arrives.
-    send([f'⚠️ Dữ liệu cũ: nến đóng gần nhất cách đây {age_h:.0f} giờ. Bot KHÔNG gửi tín hiệu lần này.',
-          'Kiểm tra mạng / Binance rồi chạy lại: node research\\live_export.js && python research\\live.py'])
-    raise SystemExit(1)
+    # bars are processed (as missed signals / exits) once fresh data arrives; run.py retries every 10 minutes.
+    print(f'⚠️ Dữ liệu cũ: nến đóng gần nhất cách đây {age_h:.0f} giờ → không xử lý, sẽ thử lại.')
+    raise SystemExit(2)
 if st['last_bar'] >= T[i_last]:
     print(f'Nến {vn(T[i_last] + BAR)} đã xử lý rồi, không có gì mới.')
     raise SystemExit
 # bars missed while the computer was off: replay them for exits / bookkeeping, but do not ask to enter late
 start = int(np.searchsorted(T, st['last_bar']) + 1) if st['last_bar'] else i_last
 start = max(start, i_last - 6 * 7)
+late = age_h > 2 and not args.asof  # back online too long after the close: the entry price has moved on
 for i in range(start, i_last + 1):
-    for m in step(st, i, live=(i == i_last)):
+    for m in step(st, i, live=(i == i_last and not late)):
         if i == i_last:
             send(m)
 missed_now = [p for p in st['open'] if p.get('missed') and p['signal_t'] > st.get('reported_missed_t', 0)]
 if missed_now:
     send([f"ℹ️ Trong lúc bot tắt đã có {len(missed_now)} tín hiệu bị lỡ: " + ', '.join(p['symbol'][:-4] for p in missed_now) + '. Không vào lệnh trễ; bot vẫn ghi lại để so sánh.'])
     st['reported_missed_t'] = max(p['signal_t'] for p in missed_now)
-hour_vn = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=cfg['tz_hours'])).hour
-if hour_vn in (7, 8):
+now_vn = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=cfg['tz_hours'])
+if now_vn.hour in (7, 8, 9) and st.get('heartbeat_day') != now_vn.strftime('%Y-%m-%d'):
+    st['heartbeat_day'] = now_vn.strftime('%Y-%m-%d')
     send([f"🤖 Bot hoạt động bình thường · {len(st['open'])} lệnh đang mở · {len(st['closed'])} lệnh đã đóng"] + report(st)[:1])
 save_state(st, args.state)
+if not args.asof and not args.dry_run:
+    HISTORY.mkdir(parents=True, exist_ok=True)
+    with open(HISTORY / 'runs.jsonl', 'a', encoding='utf-8') as f:
+        f.write(json.dumps({'type': 'run', 'run_at': vn(int(dt.datetime.now(dt.timezone.utc).timestamp() * 1000)), 'bar_close': vn(int(T[i_last] + BAR)),
+                            'data_age_h': round(age_h, 2), 'coins': C, 'late': late, 'open': len(st['open']), **RUN}, ensure_ascii=False) + '\n')
 print(f'Đã xử lý nến đóng lúc {vn(T[i_last] + BAR)} (giờ VN). Lệnh mở: {len(st["open"])}.')

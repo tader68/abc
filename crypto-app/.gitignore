@@ -46,3 +46,7 @@ research/live/config.json
 research/live/state.json
 research/live/log.txt
 .venv/
+research/live/outbox.json
+research/live/history/
+research/live/.lock
+research/live/log.old.txt

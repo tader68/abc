@@ -1,5 +1,5 @@
 #!/bin/sh
-# Cài bot trên Mac: môi trường Python riêng + tự chạy mỗi 4 giờ bằng launchd (và chạy bù khi Mac thức dậy).
+# Cài bot trên Mac: môi trường Python riêng + launchd gọi bot mỗi 10 phút (bot chỉ làm việc khi có nến 4h mới).
 #   sh research/live/install_mac.sh
 set -e
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
@@ -22,14 +22,10 @@ mkdir -p "$HOME/Library/LaunchAgents"
   echo '  <key>Label</key><string>com.abc.signalbot</string>'
   echo "  <key>ProgramArguments</key><array><string>/bin/sh</string><string>$APP/research/live/run_live.sh</string></array>"
   echo '  <key>RunAtLoad</key><true/>'
-  echo '  <key>StartCalendarInterval</key><array>'
-  for h in 3 7 11 15 19 23; do
-    echo "    <dict><key>Hour</key><integer>$h</integer><key>Minute</key><integer>5</integer></dict>"
-  done
-  echo '  </array>'
+  echo '  <key>StartInterval</key><integer>600</integer>'
   echo '</dict></plist>'
 } > "$PLIST"
 launchctl unload "$PLIST" 2>/dev/null || true
 launchctl load "$PLIST"
-echo "Xong. Bot chạy lúc 03:05, 07:05, 11:05, 15:05, 19:05, 23:05 (giờ của Mac) và chạy bù khi Mac thức dậy."
+echo "Xong. Bot kiểm tra mỗi 10 phút: có nến 4h mới thì quét tín hiệu, mất mạng thì tự thử lại, và chạy bù khi Mac thức dậy."
 echo "Nhật ký: $APP/research/live/log.txt   ·   Gỡ bot: launchctl unload $PLIST"

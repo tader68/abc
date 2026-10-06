@@ -1,7 +1,5 @@
 @echo off
-rem Chay sau moi nen 4h: tai du lieu moi tu Binance roi quet tin hieu, ghi log vao research\live\log.txt
+rem Task Scheduler goi file nay moi 10 phut. run.py tu bo qua neu khong co nen moi, tu thu lai khi mat mang.
 cd /d "%~dp0\..\.."
 set PYTHONIOENCODING=utf-8
-echo ===== %date% %time% >> research\live\log.txt
-node research\live_export.js >> research\live\log.txt 2>&1
-python research\live.py >> research\live\log.txt 2>&1
+python research\live\run.py

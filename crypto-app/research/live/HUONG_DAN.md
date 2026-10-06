@@ -7,7 +7,18 @@ Bot **không đặt lệnh hộ bạn** và **không cần API key Binance**. Sa
 - ⏰ / ⚠️ **ĐÓNG LỆNH NGAY**: đã hết 2 ngày giữ lệnh, hoặc cả thị trường đang sập.
 - 🤖 Mỗi sáng: bot còn chạy không, và lãi/lỗ cộng dồn của các tín hiệu.
 
-Giờ bot chạy (giờ Việt Nam): **03:05, 07:05, 11:05, 15:05, 19:05, 23:05**. Máy phải đang bật vào những giờ này. Nếu máy tắt, bot sẽ bỏ qua tín hiệu lúc đó (không bảo bạn vào lệnh trễ), nhưng vẫn theo dõi các lệnh đang mở khi máy bật lại.
+Nến 4h đóng lúc **03:00, 07:00, 11:00, 15:00, 19:00, 23:00** (giờ Việt Nam). Bot kiểm tra **mỗi 10 phút**, nên tín hiệu thường đến trong khoảng 10 phút sau giờ đóng nến.
+
+**Khi mất mạng hoặc máy ngủ:**
+- Bot tự thử lại sau mỗi 10 phút và tự chạy bù ngay khi có mạng lại.
+- Tin Telegram chưa gửi được sẽ được gửi bù.
+- Tín hiệu MUA chỉ được gửi nếu nến vừa đóng **dưới 2 giờ**. Trễ hơn thì bot ghi là "bị lỡ", không bảo bạn vào lệnh trễ. Tin MUA đã quá 1 giờ mà chưa gửi được sẽ bị thay bằng thông báo "đã quá hạn, BỎ QUA".
+- Mất kết nối quá 12 giờ: bot báo một tin, và báo thêm một tin khi chạy lại được.
+
+**Nhật ký để cải tiến:**
+- `research/live/log.txt`: chi tiết từng lần chạy.
+- `research/live/history/runs.jsonl`: mỗi nến 4h, mọi coin đang rơi mạnh cùng xác suất mô hình chấm, tín hiệu, lệnh đóng, và cả các lần lỗi.
+- `research/live/state.json`: toàn bộ tín hiệu và kết quả, kể cả tín hiệu bị lỡ.
 
 ## Dùng Mac? Làm theo phần này thay cho bước 1, 3 và 4 bên dưới
 
@@ -28,7 +39,7 @@ Giờ bot chạy (giờ Việt Nam): **03:05, 07:05, 11:05, 15:05, 19:05, 23:05*
    git checkout claude/charming-fermat-jjwcz7
    ```
 4. Làm **bước 2 (Telegram)** bên dưới. File cấu hình nằm ở `~/abc/crypto-app/research/live/config.json`. Tạo file: `cp research/live/config.example.json research/live/config.json` rồi `open -e research/live/config.json`.
-5. Cài môi trường Python và cho bot tự chạy mỗi 4 giờ:
+5. Cài môi trường Python và cho bot tự chạy (kiểm tra mỗi 10 phút). Sau mỗi lần cập nhật bot bằng `git pull`, chạy lại lệnh này:
    ```
    sh research/live/install_mac.sh
    ```
@@ -89,9 +100,9 @@ python research\live.py --dry-run
 
 Lệnh đầu tải dữ liệu khoảng 1–3 phút, dòng cuối phải ghi nến đóng gần nhất **cách đây dưới 4 giờ** (dữ liệu realtime từ Binance). Lệnh thứ hai in kết quả ra màn hình. Nếu thấy dòng `Đã xử lý nến đóng lúc ...` là chạy được. Chạy `python research\live.py` (bỏ `--dry-run`) để thử gửi Telegram. Nếu nến đó không có tín hiệu thì bot không nhắn gì, chỉ nhắn bản tin buổi sáng vào khung 07:05.
 
-## 4. Cho bot tự chạy mỗi 4 giờ
+## 4. Cho bot tự chạy
 
-Mở thư mục `crypto-app\research\live`, **nhấp đúp `install_task.bat`**. Bot được đăng ký trong Task Scheduler: chạy mỗi 4 giờ, và chạy thêm một lần 2 phút sau khi bạn đăng nhập máy. Nhật ký chạy nằm trong `research\live\log.txt`.
+Mở thư mục `crypto-app\research\live`, **nhấp đúp `install_task.bat`**. Bot được đăng ký trong Task Scheduler: kiểm tra mỗi 10 phút (chỉ làm việc khi có nến 4h mới, tự thử lại khi mất mạng), và chạy thêm một lần 2 phút sau khi bạn đăng nhập máy. Nhật ký chạy nằm trong `research\live\log.txt`.
 
 Nên chỉnh Windows để **máy không tự ngủ**: Settings → System → Power → Sleep: **Never** (khi cắm sạc).
 
