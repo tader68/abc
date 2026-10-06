@@ -11,6 +11,7 @@ Nhánh làm việc: `claude/charming-fermat-jjwcz7`. Toàn bộ nghiên cứu n�
 - `run.py` chỉ làm việc khi có nến 4h mới. Mất mạng thì ghi lỗi và tự thử lại ở lần sau. Mất quá 12 giờ thì báo một tin Telegram.
 - Các bước của một lần chạy: `live_export.js` (1500 nến 4h + funding từ fapi.binance.com, cùng chỉ báo như lúc huấn luyện) → `live.py` (10 mô hình, tín hiệu, theo dõi thoát lệnh, Telegram, `state.json`, `history/runs.jsonl`).
 - Môi trường Python ở `.venv/`. Config Telegram ở `research/live/config.json` (không commit; chat id đúng là id người dùng, không phải id bot).
+- Không cần gõ lệnh: `run.py` dựng lại `research/live/dashboard.html` (lối tắt `~/Desktop/Bot tín hiệu.html`) sau mỗi lần kiểm tra, và trả lời /baocao, /lenh, /trangthai trên Telegram.
 - Người dùng vào lệnh bằng tiền thật, vốn nhỏ. Hướng dẫn sử dụng: `research/live/HUONG_DAN.md`.
 
 **Chiến lược** (bản ổn định, chọn theo đúng quy trình):
