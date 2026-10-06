@@ -99,7 +99,20 @@ event &= np.isfinite(O[:, np.r_[1:n, n - 1]])
 lr = np.log(CL)
 r1 = np.full_like(CL, np.nan)
 r1[:, 1:] = lr[:, 1:] - lr[:, :-1]
-vol30 = roll(r1, 30 * BPD, np.nanstd)  # 30-day realised per-bar volatility
+def roll_std(a, w):
+    """Rolling std ignoring NaN, via cumulative sums (memory-light for long 1h panels)."""
+    f = np.isfinite(a)
+    x = np.where(f, a, 0.0)
+    cs = lambda v: np.concatenate([np.zeros((v.shape[0], 1)), np.cumsum(v, axis=1)], axis=1)  # noqa: E731
+    k, s1, s2 = cs(f.astype(float)), cs(x), cs(x * x)
+    k, s1, s2 = (z[:, w:] - z[:, :-w] for z in (k, s1, s2))
+    out = np.full_like(a, np.nan)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        out[:, w - 1 :] = np.where(k > 1, np.sqrt(np.maximum(s2 / k - (s1 / k) ** 2, 0)), np.nan)
+    return out
+
+
+vol30 = roll_std(r1, 30 * BPD)  # 30-day realised per-bar volatility
 btc = syms.index('BTCUSDT')
 with np.errstate(invalid='ignore'):
     med_drop = np.nanmedian(drop24, axis=0)
