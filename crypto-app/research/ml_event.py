@@ -41,6 +41,7 @@ ap.add_argument('--context-only', action='store_true', help='use only the event-
 ap.add_argument('--placebo', action='store_true', help='shuffle labels across events: results must collapse')
 ap.add_argument('--bars-per-day', type=int, default=6, help='6 for 4h candles, 24 for 1h')
 ap.add_argument('--subsample', type=int, default=1, help='train on every k-th event (consecutive 1h events are near-duplicates)')
+ap.add_argument('--ext', action='store_true', help='add premium index, Coinbase premium, DVOL, BTC order book and stablecoin features from <dir>/ext.npz')
 ap.add_argument('--seed', type=int, default=0)
 ap.add_argument('--save', required=True)
 args = ap.parse_args()
@@ -189,6 +190,12 @@ else:
     Xi[Xi == 255] = np.nan
     Xe, fnames = np.concatenate([Xi, Xc], axis=1), names + ctx_names
 
+if args.ext:
+    ez = np.load(D / 'ext.npz')
+    Xx = np.concatenate([ez['coin'][ci, ii], ez['market'][ii]], axis=1).astype(np.float32)
+    Xe = np.concatenate([Xe, Xx], axis=1)
+    fnames = fnames + [f'ext_{k}' for k in ez['coin_names']] + [f'ext_{k}' for k in ez['market_names']]
+    print(f'+ {Xx.shape[1]} chỉ báo từ nguồn dữ liệu mới')
 month = np.array([np.datetime64(int(x), 'ms').astype('datetime64[M]') for x in t])
 months = np.unique(month[ii])
 test_months = [m for m in months if m >= np.datetime64('2022-02')]

@@ -35,6 +35,10 @@ ap.add_argument('--tp2', type=float, default=0, help='second take-profit for the
 ap.add_argument('--bars-per-day', type=int, default=6, help='6 for 4h candles, 24 for 1h')
 ap.add_argument('--max-new', type=int, default=0, help='at most this many new positions per bar (spreads entries through a crash cascade)')
 ap.add_argument('--vol-size', action='store_true', help='scale each position by (median coin volatility / this coin volatility), clipped to 0.5-1.5')
+ap.add_argument('--idle-carry', type=float, default=0,
+                help='earn BTC/ETH funding carry on this fraction of the cash not used by open positions (spot long + perp short, '
+                     'so the yield on that capital is about half the funding rate); 0 = cash earns nothing')
+ap.add_argument('--carry-cost', type=float, default=0.01, help='yearly drag of running the carry (rebalancing, spreads)')
 ap.add_argument('--size', type=float, default=0.1, help='fraction of equity per position')
 ap.add_argument('--side', default='long', choices=['long', 'short'], help='short: sell after a pump instead of buying after a drop')
 ap.add_argument('--thr-mode', default='centered', choices=['centered', 'abs'],
@@ -66,6 +70,7 @@ for k in range(BPD, n):
     hi6[:, k] = np.nanmax(Hh[:, k - BPD : k + 1], axis=1)
 drop24 = CL / hi6 - 1
 BTC = syms.index('BTCUSDT')
+ETH = syms.index('ETHUSDT')
 with np.errstate(invalid='ignore'):
     _r = np.where(np.isfinite(CL[:, 1:] / CL[:, :-1]), np.log(CL[:, 1:] / CL[:, :-1]), np.nan)
     MKT = np.r_[0, np.nancumsum(np.nanmedian(_r, axis=0))]  # log index of the median coin
@@ -164,6 +169,11 @@ def run(thr, H, tp, sl, need_drop, universe, from_t, to_t):
                 continue
             ptp, pH = (PLAN_TP[c, i], int(PLAN_H[c, i])) if PLAN_TP is not None else (tp, H)
             open_pos[c] = dict(tp=ptp, entry=O[c, i + 1] * (1 + SIDE * 0.0002), exit_bar=i + 1 + pH, size=args.size * eq * (1 + args.conf_size * (pr[c] - thr) / (1 - thr) if args.conf_size and args.thr_mode == 'abs' else 1) * (VOLMULT[c, i] if args.vol_size else 1), fund=0.0, bar=i, part=False, booked=0.0, left=1.0)
+        if args.idle_carry:
+            used = sum(q['size'] * q['left'] for q in open_pos.values())
+            idle = max(0.0, eq - used) * args.idle_carry
+            fr = np.nanmean([FUND[BTC, i], FUND[ETH, i]])
+            eq += idle * ((0.5 * fr if np.isfinite(fr) else 0.0) - args.carry_cost / (365.25 * BPD))
         peak = max(peak, eq)
         mdd = max(mdd, 1 - eq / peak)
         curve.append((t[i], eq))
