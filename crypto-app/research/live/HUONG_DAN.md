@@ -54,7 +54,7 @@ node research\live_export.js
 python research\live.py --dry-run
 ```
 
-Lệnh đầu tải dữ liệu khoảng 1–3 phút. Lệnh thứ hai in kết quả ra màn hình. Nếu thấy dòng `Đã xử lý nến đóng lúc ...` là chạy được. Chạy `python research\live.py` (bỏ `--dry-run`) để thử gửi Telegram. Nếu nến đó không có tín hiệu thì bot không nhắn gì, chỉ nhắn bản tin buổi sáng vào khung 07:05.
+Lệnh đầu tải dữ liệu khoảng 1–3 phút, dòng cuối phải ghi nến đóng gần nhất **cách đây dưới 4 giờ** (dữ liệu realtime từ Binance). Lệnh thứ hai in kết quả ra màn hình. Nếu thấy dòng `Đã xử lý nến đóng lúc ...` là chạy được. Chạy `python research\live.py` (bỏ `--dry-run`) để thử gửi Telegram. Nếu nến đó không có tín hiệu thì bot không nhắn gì, chỉ nhắn bản tin buổi sáng vào khung 07:05.
 
 ## 4. Cho bot tự chạy mỗi 4 giờ
 

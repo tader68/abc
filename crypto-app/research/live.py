@@ -243,7 +243,11 @@ st = load_state(args.state)
 i_last = n - 1
 age_h = (dt.datetime.now(dt.timezone.utc).timestamp() * 1000 - (T[i_last] + BAR)) / 3.6e6
 if age_h > 6 and not args.asof:
-    send([f'⚠️ Dữ liệu cũ: nến đóng gần nhất cách đây {age_h:.0f} giờ. Kiểm tra live_export.js / kết nối Binance.'])
+    # never act on old candles: a 'buy now' on yesterday's price would be wrong. Keep the state untouched so the
+    # bars are processed (as missed signals / exits) once fresh data arrives.
+    send([f'⚠️ Dữ liệu cũ: nến đóng gần nhất cách đây {age_h:.0f} giờ. Bot KHÔNG gửi tín hiệu lần này.',
+          'Kiểm tra mạng / Binance rồi chạy lại: node research\\live_export.js && python research\\live.py'])
+    raise SystemExit(1)
 if st['last_bar'] >= T[i_last]:
     print(f'Nến {vn(T[i_last] + BAR)} đã xử lý rồi, không có gì mới.')
     raise SystemExit

@@ -86,4 +86,7 @@ for (const series of all) {
   kept.push(series.symbol);
 }
 writeFileSync(new URL('meta.json', dir), JSON.stringify({ market: 'futures', interval: '4h', n, features: names, symbols: kept, t: T, updated: Date.now() }));
-console.log(`Dữ liệu live: ${kept.length} coin × ${n} nến 4h, nến đóng gần nhất ${new Date(T[n - 1] + BAR).toISOString().slice(0, 16).replace('T', ' ')} UTC`);
+const lastClose = T[n - 1] + BAR;
+const ageH = (Date.now() - lastClose) / 3_600_000;
+console.log(`Dữ liệu live: ${kept.length} coin × ${n} nến 4h, nến đóng gần nhất ${new Date(lastClose + 7 * 3_600_000).toISOString().slice(0, 16).replace('T', ' ')} giờ VN (cách đây ${ageH.toFixed(1)} giờ)`);
+if (ageH > 6) console.log('⚠️ Dữ liệu KHÔNG phải mới nhất (Binance futures API không trả lời?). Bot sẽ không gửi tín hiệu.');
