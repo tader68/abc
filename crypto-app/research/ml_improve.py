@@ -206,7 +206,7 @@ if args.only:
                         print(f"      {label} = {flag:5s}: {len(x):4d} lệnh · thắng {(x > 0).mean() * 100:3.0f}% · TB {x.mean() * 100:5.2f}%/lệnh")
     raise SystemExit
 THRS = [float(x) for x in args.thr_list.split(',')] if args.thr_list else ([0.5, 0.55, 0.6, 0.65, 0.7] if args.thr_mode == 'abs' else [0.2, 0.25, 0.3])
-grid = list(itertools.product(THRS, [6, 12, 18], [0, 0.04, 0.08], [0, 0.08], [0, 0.06], ['12', '20']))
+grid = list(itertools.product(THRS, [BPD, 2 * BPD, 3 * BPD], [0, 0.04, 0.08], [0, 0.08], [0, 0.06], ['12', '20']))
 print(f'Thử {len(grid)} biến thể · CHỌN trên {np.datetime64(int(start), "ms")!s:.10} → 2024-12-31 · KIỂM TRA trên 2025-01-01 → {np.datetime64(int(end), "ms")!s:.10}\n')
 rows = []
 for thr, H, tp, sl, need, uni in grid:
@@ -221,7 +221,7 @@ def label(r):
             (f"cắt lỗ −{r['sl'] * 100:.0f}%" if r['sl'] else 'không cắt lỗ') + ' · ' + (f"coin phải {mv} ≥{r['need'] * 100:.0f}% trong 24h" if r['need'] else f'không cần điều kiện {mv}') +
             f" · {r['uni']} coin")
 
-baseline = next(r for r in rows if r['thr'] == THRS[len(THRS) // 2] and r['H'] == 6 and not r['tp'] and not r['sl'] and not r['need'] and r['uni'] == '12')
+baseline = next(r for r in rows if r['thr'] == THRS[len(THRS) // 2] and r['H'] == BPD and not r['tp'] and not r['sl'] and not r['need'] and r['uni'] == '12')
 ranked = sorted([r for r in rows if r['dev']['n'] >= 40], key=lambda r: -r['dev']['cagr'] / max(r['dev']['mdd'], 5))
 print('GỐC (như bản trước, nhưng chấm điểm mỗi 4h):')
 for r in [baseline] + ranked[:5]:
