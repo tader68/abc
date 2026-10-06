@@ -43,6 +43,9 @@ ap.add_argument('--dry-run', action='store_true')
 ap.add_argument('--replay', type=int, default=0, help='test: step through the last N candles with a scratch state, no Telegram')
 ap.add_argument('--report', action='store_true')
 ap.add_argument('--flush-only', action='store_true', help='only resend Telegram messages that failed earlier (no network)')
+ap.add_argument('--pred-file', help='test: use saved walk-forward predictions (p_dir) instead of the models')
+ap.add_argument('--replay-from', default='', help='test: with --replay, start at this date (YYYY-MM-DD)')
+ap.add_argument('--dump', help='test: with --replay, write closed trades to this JSON file')
 ap.add_argument('--asof', type=int, default=0, help='test: pretend the panel ends at this bar index')
 args = ap.parse_args()
 
@@ -172,14 +175,20 @@ mm = json.loads((Path(args.models) / 'meta.json').read_text())
 models = [lgb.Booster(model_file=str(f)) for f in sorted(Path(args.models).glob('event_seed*.txt'))]
 assert mm['panel_features'] == names, 'live panel features differ from the trained models: rerun live_export.js'
 MKT = market_index(CL)
+DELISTING = set(meta.get('delisting', []))  # Binance announced their removal: never buy, close if held
 # every feature is causal (rolling windows look back, cross-coin stats are per bar), so computing them once on
 # the whole panel gives, at each bar, exactly what was known when that bar closed
 DET = detect(Hh, L, CL, 1, mm['event'], mm['bars_per_day'])
 CTX = context(DET, CL, FUND, syms, DET['event'], 1, mm['bars_per_day'])
 
 
+PRED = np.load(args.pred_file)['p_dir'] if args.pred_file else None
+
+
 def score(c_idx, i, ctx):
     """Average win probability of the 10 models for coin rows c_idx at bar i."""
+    if PRED is not None:
+        return PRED[c_idx, i]
     xi = X[c_idx, i, :].astype(np.float32)
     xi[xi == 255] = np.nan
     xc = np.stack([np.asarray(ctx[k])[c_idx, i] for k in mm['context_features']], axis=1).astype(np.float32)
@@ -222,7 +231,11 @@ def step(st, i, live=True):
         # missed while the bot was off, or skipped by the user: tracked for statistics only, no reminders
         quiet = p.get('missed') or p.get('user') == 'skipped'
         if done is None and p.get('entry') is not None and not quiet:
-            if i + 1 >= sb + 1 + cfg['hold_bars']:
+            if live and p['symbol'] in DELISTING and not p.get('delist_warned'):
+                p['delist_warned'] = True
+                msgs.append([f"⚠️ ĐÓNG LỆNH {p['symbol'][:-4]} NGAY (lệnh market)", 'Binance đã thông báo gỡ / ngừng giao dịch coin này. Giữ tới lúc gỡ thường lỗ nặng.',
+                             f"Giá hiện tại {fmt(CL[c, i])} · giá vào {fmt(p['entry'])} ({(CL[c, i] / p['entry'] - 1) * 100:+.1f}%)."])
+            elif i + 1 >= sb + 1 + cfg['hold_bars']:
                 msgs.append([f"⏰ ĐÓNG LỆNH {p['symbol'][:-4]} NGAY (lệnh market)", f"Đã hết {cfg['hold_bars'] * 4}h giữ lệnh mà chưa chạm chốt lời.",
                              f"Giá hiện tại {fmt(CL[c, i])} · giá vào {fmt(p['entry'])} ({(CL[c, i] / p['entry'] - 1) * 100:+.1f}%)."])
                 p['exit_pending'] = 'time'
@@ -249,7 +262,7 @@ def step(st, i, live=True):
     # 2) new signals on bar i
     held = {p['symbol'] for p in st['open']}
     cand = np.where(det['event'][:, k] & (det['drop24'][:, k] <= -cfg['need_drop']) & np.isfinite(CL[:, i]))[0]
-    cand = [c for c in cand if syms[c] not in held]
+    cand = [c for c in cand if syms[c] not in held and (syms[c] not in DELISTING or not live)]
     if cand:
         pr = score(np.array(cand), i, ctx)
         order = np.argsort(-pr)
@@ -259,7 +272,7 @@ def step(st, i, live=True):
             if live:
                 RUN['candidates'].append({'symbol': syms[c], 'drop24': round(float(det['drop24'][c, k]), 4), 'p': round(p, 4),
                                           'price': float(CL[c, i]), 'action': 'below_threshold' if p < cfg['threshold'] else 'full' if full else 'signal'})
-            if p < cfg['threshold'] or full:
+            if not np.isfinite(p) or p < cfg['threshold'] or full:
                 continue
             frac = cfg['size'] * (1 + cfg['conf_size'] * (p - cfg['threshold']) / (1 - cfg['threshold']))
             pos = dict(symbol=syms[c], signal_t=int(T[i]), signal_close=float(CL[c, i]), p=p, size=frac, entry=None, checked=i,
@@ -285,9 +298,12 @@ def step(st, i, live=True):
 
 if args.replay:
     st = load_state(None)
-    for i in range(n - args.replay, n):
+    first = int(np.searchsorted(T, np.datetime64(args.replay_from).astype('datetime64[ms]').astype(np.int64))) if args.replay_from else n - args.replay
+    for i in range(first, n):
         step(st, i)
-    print(f'Replay {args.replay} nến ({vn(T[n - args.replay])} → {vn(T[-1] + BAR)}): {len(st["closed"])} lệnh đóng, {len(st["open"])} đang mở')
+    if args.dump:
+        Path(args.dump).write_text(json.dumps(st['closed']))
+    print(f'Replay {n - first} nến ({vn(T[first])} → {vn(T[-1] + BAR)}): {len(st["closed"])} lệnh đóng, {len(st["open"])} đang mở')
     for c in st['closed']:
         print(f"  {vn(c['signal_t'])} {c['symbol']:<12} p={c['p']:.2f} vốn {c['size'] * 100:.0f}% → {c['reason']:<6} {c['ret'] * 100:+6.2f}%")
     print('\n'.join(report(st)))

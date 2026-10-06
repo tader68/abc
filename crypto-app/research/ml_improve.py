@@ -39,6 +39,7 @@ ap.add_argument('--idle-carry', type=float, default=0,
                 help='earn BTC/ETH funding carry on this fraction of the cash not used by open positions (spot long + perp short, '
                      'so the yield on that capital is about half the funding rate); 0 = cash earns nothing')
 ap.add_argument('--carry-cost', type=float, default=0.01, help='yearly drag of running the carry (rebalancing, spreads)')
+ap.add_argument('--dump', help='with --only: write the trades of the check period (2025-now) to this JSON file')
 ap.add_argument('--size', type=float, default=0.1, help='fraction of equity per position')
 ap.add_argument('--side', default='long', choices=['long', 'short'], help='short: sell after a pump instead of buying after a drop')
 ap.add_argument('--thr-mode', default='centered', choices=['centered', 'abs'],
@@ -203,6 +204,8 @@ if args.only:
             prev = es[-1]
         print(f"{name}: {r['cagr']:6.1f}%/năm · sụt {r['mdd']:4.1f}% · {r['n']} lệnh · thắng {r['win']:.0f}% · TB {r['mean']:.2f}%/lệnh · t={r['t']:.1f}")
         print('      theo năm: ' + ' · '.join(ys))
+        if args.dump and a == SPLIT:
+            Path(args.dump).write_text(json.dumps(trade_log))
         if args.show_trades:
             lg = sorted(trade_log, key=lambda x: x[2])
             print('      tệ nhất: ' + ', '.join(f'{a} {b} {r * 100:+.1f}%' for a, b, r in lg[:6]))

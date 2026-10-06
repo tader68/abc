@@ -49,6 +49,25 @@ const load = async (sym) => {
   }
 };
 
+// contracts Binance has scheduled for delisting: a perpetual normally has deliveryDate in 2100; once a delisting is
+// announced it is set to the settlement time. Their price usually collapses first, which looks like a 'dip' to the
+// models, so the bot must not buy them (and must warn about open positions in them).
+let delisting = [];
+let delistingKnown = false;
+try {
+  const res = await fetch('https://fapi.binance.com/fapi/v1/exchangeInfo');
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const info = await res.json();
+  const far = Date.UTC(2090, 0, 1);
+  delisting = info.symbols
+    .filter((x) => meta.symbols.includes(x.symbol) && (x.status !== 'TRADING' || (x.contractType === 'PERPETUAL' && x.deliveryDate < far)))
+    .map((x) => x.symbol);
+  delistingKnown = true;
+  if (delisting.length) console.log(`  Binance sắp gỡ / ngừng giao dịch: ${delisting.join(', ')}`);
+} catch (e) {
+  console.log(`  ⚠️ không đọc được danh sách coin sắp bị gỡ (${String(e.message).slice(0, 60)})`);
+}
+
 const all = (await pool(meta.symbols, 6, load)).filter(Boolean);
 const btcS = all.find((s) => s.symbol === 'BTCUSDT');
 if (!btcS) throw new Error('không tải được BTCUSDT');
@@ -85,7 +104,7 @@ for (const series of all) {
   writeFileSync(new URL(`P_${series.symbol}.bin`, dir), Buffer.from(P.buffer));
   kept.push(series.symbol);
 }
-writeFileSync(new URL('meta.json', dir), JSON.stringify({ market: 'futures', interval: '4h', n, features: names, symbols: kept, t: T, updated: Date.now() }));
+writeFileSync(new URL('meta.json', dir), JSON.stringify({ market: 'futures', interval: '4h', n, features: names, symbols: kept, t: T, updated: Date.now(), delisting, delistingKnown }));
 const lastClose = T[n - 1] + BAR;
 const ageH = (Date.now() - lastClose) / 3_600_000;
 console.log(`Dữ liệu live: ${kept.length} coin × ${n} nến 4h, nến đóng gần nhất ${new Date(lastClose + 7 * 3_600_000).toISOString().slice(0, 16).replace('T', ' ')} giờ VN (cách đây ${ageH.toFixed(1)} giờ)`);

@@ -48,6 +48,8 @@ Nhánh làm việc: `claude/charming-fermat-jjwcz7`. Toàn bộ nghiên cứu n�
   - có coin đã chết trong dữ liệu.
 - Huấn luyện LightGBM **chạy lần lượt** (máy 4 nhân; chạy song song chậm đi khoảng 50 lần). Đừng `pkill -f` theo tên script, vì lệnh đó giết luôn shell đang chạy nó.
 - Binance chặn (HTTP 451) từ máy chủ cloud, nên lúc đó dùng `data.binance.vision`. Trên máy người dùng ở Việt Nam, fapi hoạt động bình thường.
+- **Kiểm tra bot khớp backtest** sau mỗi lần sửa `live.py`: chạy `ml_improve.py --pred bag10.npz --thr-mode abs --mkt-exit 0.05 --conf-size 1 --only 0.9,12,0.04,0,0.06,all --dump bt.json` và `live.py --panel research/.cache/ml/panel_4h --pred-file bag10.npz --replay 1 --replay-from 2025-01-01 --dump lv.json --config /nonexistent`. Hai bên phải cho cùng các lệnh (10/2026: 138/138, lãi/lỗ chênh 0). `bag10.npz` là trung bình 10 file walk-forward của `ml_event.py --save` (`ml_ensemble.py`).
+- Bot không mua coin Binance đã thông báo gỡ (`exchangeInfo`: deliveryDate của perpetual < 2090 hoặc status ≠ TRADING), và nhắc đóng nếu đang giữ. Bài kiểm tra trên cho thấy 6 tín hiệu ngay trước khi coin bị gỡ (FTM, BAL, EOS, MKR, SXP, TON), lệnh nào cũng lỗ.
 - `research/event_features.py` là code dùng chung giữa huấn luyện và bot. Sửa ở đó thì phải kiểm tra lại `ml_event.py` cho ra kết quả y hệt (`ev_s22`).
 - Commit cuối message có dòng Co-Authored-By. Không tạo PR nếu người dùng không yêu cầu.
 
