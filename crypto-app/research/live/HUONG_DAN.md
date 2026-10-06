@@ -9,6 +9,39 @@ Bot **không đặt lệnh hộ bạn** và **không cần API key Binance**. Sa
 
 Giờ bot chạy (giờ Việt Nam): **03:05, 07:05, 11:05, 15:05, 19:05, 23:05**. Máy phải đang bật vào những giờ này. Nếu máy tắt, bot sẽ bỏ qua tín hiệu lúc đó (không bảo bạn vào lệnh trễ), nhưng vẫn theo dõi các lệnh đang mở khi máy bật lại.
 
+## Dùng Mac? Làm theo phần này thay cho bước 1, 3 và 4 bên dưới
+
+1. Mở **Terminal** (Cmd + Space, gõ `Terminal`). Cài **Homebrew** (trình cài phần mềm cho Mac):
+   ```
+   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+   ```
+   Cài xong, nó in ra mục **"Next steps"** gồm 2 lệnh `echo ... >> ~/.zprofile` và `eval ...`. Copy và chạy đúng 2 lệnh đó.
+2. Cài Node, Python, Git và thư viện cần cho LightGBM:
+   ```
+   brew install node python git libomp
+   ```
+3. Tải bot về **thư mục nhà** (đừng để trong Documents hay Desktop, vì macOS chặn chương trình chạy tự động đọc các thư mục đó):
+   ```
+   cd ~
+   git clone https://github.com/tader68/abc.git
+   cd abc/crypto-app
+   git checkout claude/charming-fermat-jjwcz7
+   ```
+4. Làm **bước 2 (Telegram)** bên dưới. File cấu hình nằm ở `~/abc/crypto-app/research/live/config.json`. Tạo file: `cp research/live/config.example.json research/live/config.json` rồi `open -e research/live/config.json`.
+5. Cài môi trường Python và cho bot tự chạy mỗi 4 giờ:
+   ```
+   sh research/live/install_mac.sh
+   ```
+6. Chạy thử ngay:
+   ```
+   node research/live_export.js
+   .venv/bin/python research/live.py
+   ```
+   Dòng cuối của lệnh đầu phải ghi **"cách đây dưới 4 giờ"**.
+7. Không cho Mac ngủ: **System Settings → Battery (hoặc Energy) → Options → bật "Prevent automatic sleeping on power adapter when the display is off"**, và cắm sạc. MacBook **gập màn hình sẽ ngủ**: khi đó bot không chạy. Lúc Mac thức dậy, bot chạy bù để theo dõi lệnh, nhưng tín hiệu mua lúc ngủ sẽ bị lỡ.
+
+Trên Mac, mọi lệnh `python research\live.py ...` trong hướng dẫn này đổi thành `.venv/bin/python research/live.py ...` (dấu `/` thay cho `\`), chạy trong thư mục `~/abc/crypto-app`.
+
 ## 1. Cài phần mềm (làm một lần)
 
 1. **Node.js** bản LTS (22 trở lên): https://nodejs.org → tải bản Windows → Next liên tục.

@@ -45,3 +45,4 @@ ml-improve-results.json
 research/live/config.json
 research/live/state.json
 research/live/log.txt
+.venv/
