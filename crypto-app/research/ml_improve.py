@@ -24,6 +24,10 @@ ap.add_argument('--out', default='ml-improve-results.json')
 ap.add_argument('--only', help='evaluate one variant: thr,H,tp,sl,need,uni (e.g. 0.25,12,0.04,0,0.06,20)')
 ap.add_argument('--context', action='store_true', help='with --only: split trades by macro context (needs macro.npz)')
 ap.add_argument('--size', type=float, default=0.1, help='fraction of equity per position')
+ap.add_argument('--side', default='long', choices=['long', 'short'], help='short: sell after a pump instead of buying after a drop')
+ap.add_argument('--thr-mode', default='centered', choices=['centered', 'abs'],
+                help='centered: |p - 0.5| >= thr in the trade direction (general model); abs: p >= thr (event model win probability)')
+ap.add_argument('--thr-list', default='', help='comma list of thresholds for the grid (default 0.2,0.25,0.3; abs mode 0.5,0.55,0.6,0.65,0.7)')
 args = ap.parse_args()
 
 D = Path(args.dir)
@@ -44,6 +48,11 @@ hi6 = np.full((C, n), np.nan)
 for k in range(6, n):
     hi6[:, k] = np.nanmax(Hh[:, k - 6 : k + 1], axis=1)
 drop24 = CL / hi6 - 1
+lo6 = np.full((C, n), np.nan)
+for k in range(6, n):
+    lo6[:, k] = np.nanmin(L[:, k - 6 : k + 1], axis=1)
+rise24 = CL / lo6 - 1
+SIDE = 1 if args.side == 'long' else -1
 
 
 trade_bars = []
@@ -64,14 +73,19 @@ def run(thr, H, tp, sl, need_drop, universe, from_t, to_t):
         for c in list(open_pos):
             p = open_pos[c]
             px = None
-            if sl and L[c, i] <= p['entry'] * (1 - sl):
-                px = min(O[c, i], p['entry'] * (1 - sl))
-            elif tp and Hh[c, i] >= p['entry'] * (1 + tp):
-                px = max(O[c, i], p['entry'] * (1 + tp))
+            e = p['entry']
+            if SIDE > 0 and sl and L[c, i] <= e * (1 - sl):
+                px = min(O[c, i], e * (1 - sl))
+            elif SIDE < 0 and sl and Hh[c, i] >= e * (1 + sl):
+                px = max(O[c, i], e * (1 + sl))
+            elif SIDE > 0 and tp and Hh[c, i] >= e * (1 + tp):
+                px = max(O[c, i], e * (1 + tp))
+            elif SIDE < 0 and tp and L[c, i] <= e * (1 - tp):
+                px = min(O[c, i], e * (1 - tp))
             elif i >= p['exit_bar']:
                 px = O[c, i]
             if px is not None and np.isfinite(px):
-                r = px / p['entry'] - 1 - 2 * COST - p['fund']
+                r = SIDE * (px / p['entry'] - 1) - 2 * COST - SIDE * p['fund']
                 eq += p['size'] * r
                 trades.append(r)
                 trade_bars.append(p['bar'])
@@ -81,13 +95,14 @@ def run(thr, H, tp, sl, need_drop, universe, from_t, to_t):
                     p['fund'] += FUND[c, i]
         # 2) new signals at the close of bar i -> enter at the open of bar i+1
         pr = p_dir[:, i]
-        ok = tradable & np.isfinite(pr) & (pr - 0.5 >= thr) & np.isfinite(O[:, i + 1])
+        edge = pr if args.thr_mode == 'abs' else SIDE * (pr - 0.5)
+        ok = tradable & np.isfinite(pr) & (edge >= thr) & np.isfinite(O[:, i + 1])
         if need_drop:
-            ok &= drop24[:, i] <= -need_drop
+            ok &= (drop24[:, i] <= -need_drop) if SIDE > 0 else (rise24[:, i] >= need_drop)
         for c in np.where(ok)[0]:
             if c in open_pos or len(open_pos) >= max(1, int(round(1 / args.size))):
                 continue
-            open_pos[c] = dict(entry=O[c, i + 1] * (1 + 0.0002), exit_bar=i + 1 + H, size=args.size * eq, fund=0.0, bar=i)
+            open_pos[c] = dict(entry=O[c, i + 1] * (1 + SIDE * 0.0002), exit_bar=i + 1 + H, size=args.size * eq, fund=0.0, bar=i)
         peak = max(peak, eq)
         mdd = max(mdd, 1 - eq / peak)
         curve.append((t[i], eq))
@@ -127,7 +142,8 @@ if args.only:
                     if len(x) >= 5:
                         print(f"      {label} = {flag:5s}: {len(x):4d} lệnh · thắng {(x > 0).mean() * 100:3.0f}% · TB {x.mean() * 100:5.2f}%/lệnh")
     raise SystemExit
-grid = list(itertools.product([0.2, 0.25, 0.3], [6, 12, 18], [0, 0.04, 0.08], [0, 0.08], [0, 0.06], ['12', '20']))
+THRS = [float(x) for x in args.thr_list.split(',')] if args.thr_list else ([0.5, 0.55, 0.6, 0.65, 0.7] if args.thr_mode == 'abs' else [0.2, 0.25, 0.3])
+grid = list(itertools.product(THRS, [6, 12, 18], [0, 0.04, 0.08], [0, 0.08], [0, 0.06], ['12', '20']))
 print(f'Thử {len(grid)} biến thể · CHỌN trên {np.datetime64(int(start), "ms")!s:.10} → 2024-12-31 · KIỂM TRA trên 2025-01-01 → {np.datetime64(int(end), "ms")!s:.10}\n')
 rows = []
 for thr, H, tp, sl, need, uni in grid:
@@ -136,11 +152,13 @@ for thr, H, tp, sl, need, uni in grid:
     rows.append(dict(thr=thr, H=H, tp=tp, sl=sl, need=need, uni=uni, dev=a))
 
 def label(r):
-    return (f"ngưỡng {r['thr'] * 100:.0f}% · giữ {r['H'] // 6} ngày · " + (f"chốt lời +{r['tp'] * 100:.0f}%" if r['tp'] else 'không chốt sớm') + ' · ' +
-            (f"cắt lỗ −{r['sl'] * 100:.0f}%" if r['sl'] else 'không cắt lỗ') + ' · ' + (f"coin phải rơi ≥{r['need'] * 100:.0f}% trong 24h" if r['need'] else 'không cần điều kiện rơi') +
+    thr = f"xác suất thắng ≥{r['thr'] * 100:.0f}%" if args.thr_mode == 'abs' else f"ngưỡng {r['thr'] * 100:.0f}%"
+    mv = 'rơi' if SIDE > 0 else 'tăng'
+    return (('SHORT · ' if SIDE < 0 else '') + f"{thr} · giữ {r['H'] // 6} ngày · " + (f"chốt lời +{r['tp'] * 100:.0f}%" if r['tp'] else 'không chốt sớm') + ' · ' +
+            (f"cắt lỗ −{r['sl'] * 100:.0f}%" if r['sl'] else 'không cắt lỗ') + ' · ' + (f"coin phải {mv} ≥{r['need'] * 100:.0f}% trong 24h" if r['need'] else f'không cần điều kiện {mv}') +
             f" · {r['uni']} coin")
 
-baseline = next(r for r in rows if r['thr'] == 0.25 and r['H'] == 6 and not r['tp'] and not r['sl'] and not r['need'] and r['uni'] == '12')
+baseline = next(r for r in rows if r['thr'] == THRS[len(THRS) // 2] and r['H'] == 6 and not r['tp'] and not r['sl'] and not r['need'] and r['uni'] == '12')
 ranked = sorted([r for r in rows if r['dev']['n'] >= 40], key=lambda r: -r['dev']['cagr'] / max(r['dev']['mdd'], 5))
 print('GỐC (như bản trước, nhưng chấm điểm mỗi 4h):')
 for r in [baseline] + ranked[:5]:
