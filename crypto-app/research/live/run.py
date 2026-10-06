@@ -84,6 +84,68 @@ def run(cmd, timeout):
         return 127, str(e)
 
 
+def cfg_get():
+    return json.loads((LIVE / 'config.json').read_text(encoding='utf-8')) if (LIVE / 'config.json').exists() else {}
+
+
+def answer_commands(rs):
+    """Reply to /baocao, /lenh, /trangthai sent to the bot on Telegram (checked at every 10-minute start)."""
+    cfg = cfg_get()
+    tok, chat = cfg.get('telegram_token'), str(cfg.get('telegram_chat_id', ''))
+    if not tok or not chat:
+        return
+    api = f'https://api.telegram.org/bot{tok}'
+    try:
+        if not rs.get('commands_set'):
+            cmds = [{'command': 'baocao', 'description': 'Tổng kết lãi/lỗ'}, {'command': 'lenh', 'description': 'Lệnh đang mở'},
+                    {'command': 'trangthai', 'description': 'Bot có đang chạy không'}]
+            urllib.request.urlopen(api + '/setMyCommands', urllib.parse.urlencode({'commands': json.dumps(cmds, ensure_ascii=False)}).encode(), timeout=20).read()
+            rs['commands_set'] = True
+        r = json.load(urllib.request.urlopen(f"{api}/getUpdates?timeout=0&offset={rs.get('update_offset', 0)}", timeout=20))
+    except Exception:  # noqa: BLE001 - offline: try again next time
+        return
+    st = json.loads((LIVE / 'state.json').read_text(encoding='utf-8')) if (LIVE / 'state.json').exists() else {'open': [], 'closed': [], 'last_bar': 0}
+    for u in r.get('result', []):
+        rs['update_offset'] = u['update_id'] + 1
+        msg = u.get('message') or {}
+        if str(msg.get('chat', {}).get('id')) != chat:
+            continue  # only the owner may ask
+        cmd = (msg.get('text') or '').strip().lower().split('@')[0]
+        real_open = [p for p in st['open'] if not p.get('missed')]
+        closed = [c for c in st['closed'] if not c.get('missed')]
+        if cmd in ('/baocao', 'baocao', 'báo cáo'):
+            if closed:
+                rets = [c['ret'] for c in closed]
+                eq = 1.0
+                for c in closed:
+                    eq *= 1 + c['ret'] * c['size']
+                text = (f"📊 {len(closed)} lệnh đã đóng · thắng {sum(x > 0 for x in rets) / len(rets) * 100:.0f}% · lãi TB {sum(rets) / len(rets) * 100:+.2f}%/lệnh\n"
+                        f"Tổng trên vốn: {(eq - 1) * 100:+.1f}% ({(eq - 1) * cfg.get('capital_usdt', 1000):+.0f}$)\nĐang mở: {len(real_open)} lệnh")
+            else:
+                text = f'📊 Chưa có lệnh nào đóng. Đang mở: {len(real_open)} lệnh.'
+        elif cmd in ('/lenh', 'lenh', 'lệnh'):
+            text = '📂 Lệnh đang mở:\n' + '\n'.join(
+                f"• {p['symbol'][:-4]}: vào {p.get('entry') or p.get('signal_close'):.6g}, chốt lời {(p.get('tp_price') or (p.get('entry') or p['signal_close']) * 1.04):.6g}, hạn {vn(p['deadline_t'] / 1000)}"
+                for p in real_open) if real_open else '📂 Không có lệnh nào đang mở.'
+        elif cmd in ('/trangthai', 'trangthai', 'trạng thái', '/start', '/help'):
+            age = (now() - st['last_bar'] / 1000 - BAR) / 3600 if st.get('last_bar') else None
+            text = ('🤖 Bot đang chạy bình thường' if age is not None and age <= 4.5 else '⚠️ Bot đang trễ / chưa chạy được') + \
+                   (f"\nNến xử lý gần nhất: {vn(st['last_bar'] / 1000 + BAR)} · lần chạy OK gần nhất: {vn(rs.get('last_ok', now()))}" if st.get('last_bar') else '') + \
+                   '\nLệnh: /baocao (lãi/lỗ) · /lenh (lệnh đang mở) · /trangthai'
+        else:
+            continue
+        telegram(text)
+
+
+def refresh_dashboard():
+    try:
+        sys.path.insert(0, str(LIVE))
+        import dashboard  # noqa: PLC0415 - optional, never break the run
+        dashboard.build()
+    except Exception as e:  # noqa: BLE001
+        log(f'(không tạo được dashboard: {e})')
+
+
 # ---------- one runner at a time ----------
 try:
     LOCK.mkdir()
@@ -100,9 +162,13 @@ try:
     expected_ms = (int((now() - 60) // BAR) * BAR - BAR) * 1000
     state_file = LIVE / 'state.json'
     last_bar = json.loads(state_file.read_text(encoding='utf-8')).get('last_bar', 0) if state_file.exists() else 0
+    answer_commands(rs)
     if last_bar >= expected_ms:
         if (LIVE / 'outbox.json').exists():  # messages that failed earlier: try again now
             run([PY, 'research/live.py', '--flush-only'], 120)
+        HIST.mkdir(parents=True, exist_ok=True)
+        RUNNER.write_text(json.dumps(rs), encoding='utf-8')
+        refresh_dashboard()
         sys.exit(0)
 
     log(f'===== {vn(now())} (giờ VN)')
@@ -117,7 +183,7 @@ try:
     if ok:
         if rs.get('alerted') or now() - rs.get('last_ok', now()) > 12 * 3600:
             telegram(f"✅ Bot đã chạy lại bình thường (lần chạy thành công trước: {vn(rs['last_ok'])}). Các tín hiệu trong lúc mất kết nối được ghi là 'bị lỡ'.")
-        rs = {'last_ok': now(), 'alerted': False}
+        rs.update(last_ok=now(), alerted=False)
     else:
         tail = '\n'.join(out.strip().splitlines()[-5:])
         record({'type': 'fail', 'step': step, 'rc': rc, 'error': tail[-800:]})
@@ -126,5 +192,6 @@ try:
             rs['alerted'] = telegram(f'⚠️ Bot chưa chạy được {down_h:.0f} giờ (mất mạng hoặc Binance lỗi). Bot tự thử lại mỗi 10 phút.\nLỗi gần nhất: {tail[-300:]}')
     HIST.mkdir(parents=True, exist_ok=True)
     RUNNER.write_text(json.dumps(rs), encoding='utf-8')
+    refresh_dashboard()
 finally:
     shutil.rmtree(LOCK, ignore_errors=True)

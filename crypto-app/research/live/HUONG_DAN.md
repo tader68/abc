@@ -53,6 +53,22 @@ Nến 4h đóng lúc **03:00, 07:00, 11:00, 15:00, 19:00, 23:00** (giờ Việt 
 
 Trên Mac, mọi lệnh `python research\live.py ...` trong hướng dẫn này đổi thành `.venv/bin/python research/live.py ...` (dấu `/` thay cho `\`), chạy trong thư mục `~/abc/crypto-app`.
 
+## Xem bot mà không cần gõ lệnh
+
+- **Trên máy tính:** nhấp đúp file **`Bot tín hiệu.html`** trên Desktop. Trang hiển thị:
+  - bot có đang chạy không;
+  - lệnh đang mở, lãi/lỗ hiện tại và còn bao lâu tới hạn;
+  - tổng lãi, lãi theo tháng, đường vốn;
+  - "radar" các coin đang bị bán tháo và xác suất mô hình chấm.
+
+  Bot tự cập nhật trang mỗi 10 phút, trang tự làm mới mỗi 5 phút. Muốn xem nhanh hơn, có thể kéo vào thanh Bookmark của trình duyệt. Lối tắt được tạo khi chạy `install_mac.sh` (Windows: mở `research\live\dashboard.html`).
+- **Trên điện thoại:** nhắn cho bot Telegram:
+  - **/baocao**: tổng lãi/lỗ;
+  - **/lenh**: các lệnh đang mở;
+  - **/trangthai**: bot có đang chạy không.
+
+  Bot trả lời trong vòng 10 phút, hoặc bấm nút Menu trong khung chat để chọn lệnh.
+
 ## 1. Cài phần mềm (làm một lần)
 
 1. **Node.js** bản LTS (22 trở lên): https://nodejs.org → tải bản Windows → Next liên tục.

@@ -27,5 +27,8 @@ mkdir -p "$HOME/Library/LaunchAgents"
 } > "$PLIST"
 launchctl unload "$PLIST" 2>/dev/null || true
 launchctl load "$PLIST"
+.venv/bin/python research/live/dashboard.py >/dev/null 2>&1 || true
+ln -sf "$APP/research/live/dashboard.html" "$HOME/Desktop/Bot tín hiệu.html"
+echo "Đã tạo lối tắt trên Desktop: 'Bot tín hiệu.html' (nhấp đúp để xem tình trạng bot, lệnh đang mở, lãi/lỗ)."
 echo "Xong. Bot kiểm tra mỗi 10 phút: có nến 4h mới thì quét tín hiệu, mất mạng thì tự thử lại, và chạy bù khi Mac thức dậy."
 echo "Nhật ký: $APP/research/live/log.txt   ·   Gỡ bot: launchctl unload $PLIST"

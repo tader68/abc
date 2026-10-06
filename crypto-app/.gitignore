@@ -50,3 +50,4 @@ research/live/outbox.json
 research/live/history/
 research/live/.lock
 research/live/log.old.txt
+research/live/dashboard.html
