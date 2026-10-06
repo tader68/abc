@@ -40,6 +40,7 @@ ap.add_argument('--idle-carry', type=float, default=0,
                      'so the yield on that capital is about half the funding rate); 0 = cash earns nothing')
 ap.add_argument('--carry-cost', type=float, default=0.01, help='yearly drag of running the carry (rebalancing, spreads)')
 ap.add_argument('--dump', help='with --only: write the trades of the check period (2025-now) to this JSON file')
+ap.add_argument('--limit-entry', type=float, default=0, help='buy with a limit order this far below the next open, valid for one bar; no fill = no trade. OPTIMISTIC: the engine knows at signal time which orders will fill and gives their slots to other signals; the bot replay (live.py --pred-file) is the realistic test, and there limits were slightly worse (10/2026)')
 ap.add_argument('--size', type=float, default=0.1, help='fraction of equity per position')
 ap.add_argument('--side', default='long', choices=['long', 'short'], help='short: sell after a pump instead of buying after a drop')
 ap.add_argument('--thr-mode', default='centered', choices=['centered', 'abs'],
@@ -114,6 +115,8 @@ def run(thr, H, tp, sl, need_drop, universe, from_t, to_t):
         # 1) manage open positions during bar i
         for c in list(open_pos):
             p = open_pos[c]
+            if i < p.get('first', 0):
+                continue
             px = None
             tp_hit = False
             e = p['entry']
@@ -169,7 +172,15 @@ def run(thr, H, tp, sl, need_drop, universe, from_t, to_t):
             if c in open_pos or len(open_pos) >= (args.max_open or max(1, int(round(1 / args.size)))):
                 continue
             ptp, pH = (PLAN_TP[c, i], int(PLAN_H[c, i])) if PLAN_TP is not None else (tp, H)
-            open_pos[c] = dict(tp=ptp, entry=O[c, i + 1] * (1 + SIDE * 0.0002), exit_bar=i + 1 + pH, size=args.size * eq * (1 + args.conf_size * (pr[c] - thr) / (1 - thr) if args.conf_size and args.thr_mode == 'abs' else 1) * (VOLMULT[c, i] if args.vol_size else 1), fund=0.0, bar=i, part=False, booked=0.0, left=1.0)
+            entry0 = O[c, i + 1] * (1 + SIDE * 0.0002)
+            first_bar = i + 1
+            if args.limit_entry:
+                lim = O[c, i + 1] * (1 - SIDE * args.limit_entry)
+                if not (L[c, i + 1] <= lim if SIDE > 0 else Hh[c, i + 1] >= lim):
+                    continue  # limit not reached during the next bar: no trade
+                entry0 = lim
+                first_bar = i + 2  # filled somewhere inside bar i+1: manage from the following bar (conservative)
+            open_pos[c] = dict(tp=ptp, entry=entry0, first=first_bar, exit_bar=i + 1 + pH, size=args.size * eq * (1 + args.conf_size * (pr[c] - thr) / (1 - thr) if args.conf_size and args.thr_mode == 'abs' else 1) * (VOLMULT[c, i] if args.vol_size else 1), fund=0.0, bar=i, part=False, booked=0.0, left=1.0)
         if args.idle_carry:
             used = sum(q['size'] * q['left'] for q in open_pos.values())
             idle = max(0.0, eq - used) * args.idle_carry

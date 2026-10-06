@@ -33,6 +33,7 @@ Nhánh làm việc: `claude/charming-fermat-jjwcz7`. Toàn bộ nghiên cứu n�
 - Dữ liệu vĩ mô (S&P, VIX, DXY, FOMC, Wikipedia) và nguồn mới (premium index, Coinbase premium, DVOL, sổ lệnh, stablecoin): mô hình bám vào biến chậm, bị overfit theo giai đoạn.
 - Nến 1h, chiều short sau khi coin bị bơm, cắt lỗ cứng, thoát khi BTC sập, giới hạn số lệnh / lệnh mới mỗi nến.
 - Chia vốn theo biến động, ngưỡng theo thứ hạng, để mô hình tự chọn TP / thời gian giữ, ghép mô hình khác cấu hình.
+- Vào lệnh bằng LIMIT thấp hơn 1–2% (hủy sau 4h): `ml_improve.py --limit-entry` trông tốt hơn nhưng đó là ảo do engine biết trước lệnh nào khớp. Replay bằng bot (thực tế) cho kết quả kém hơn market: 2022–2024 +55.2% so với +57.4%/năm; 2025–nay +23.5% so với +26.5%. Bot vẫn có tùy chọn `limit_entry` nhưng mặc định tắt.
 
 **Có lợi thế nhỏ:**
 - Funding carry BTC/ETH khoảng 3%/năm, có thể dùng cho phần vốn để không.

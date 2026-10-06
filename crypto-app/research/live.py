@@ -50,7 +50,7 @@ ap.add_argument('--asof', type=int, default=0, help='test: pretend the panel end
 args = ap.parse_args()
 
 DEFAULTS = dict(telegram_token='', telegram_chat_id='', capital_usdt=1000, size=0.10, conf_size=1.0, threshold=0.90,
-                need_drop=0.06, tp=0.04, hold_bars=12, mkt_exit=0.05, max_open=10, skip_if_above=0.02, tz_hours=7)
+                need_drop=0.06, tp=0.04, hold_bars=12, mkt_exit=0.05, max_open=10, skip_if_above=0.02, limit_entry=0.0, tz_hours=7)
 cfg = dict(DEFAULTS)
 if Path(args.config).exists():
     cfg.update(json.loads(Path(args.config).read_text(encoding='utf-8')))
@@ -209,10 +209,25 @@ def step(st, i, live=True):
             still.append(p)
             continue
         if p.get('entry') is None and i >= sb + 1:
-            p['entry'] = float(O[c, sb + 1]) * (1 + 0.0002)
+            if cfg['limit_entry']:
+                # limit buy below the open, valid during the next 4h candle (as in the backtest)
+                lim = float(O[c, sb + 1]) * (1 - cfg['limit_entry'])
+                if not L[c, sb + 1] <= lim:
+                    p.update(unfilled=True, exit_t=int(T[sb + 1]))
+                    st.setdefault('unfilled', []).append(p)
+                    if live and not p.get('missed') and p.get('user') != 'skipped':
+                        msgs.append([f"⌛ Lệnh LIMIT mua {p['symbol'][:-4]} không khớp trong 4 giờ → HỦY lệnh chờ trên Binance (nếu chưa khớp).",
+                                     'Giá không giảm thêm tới mức đặt. Không vào lệnh này.'])
+                    continue
+                p['entry'], p['first'] = lim, sb + 2  # filled inside bar sb+1: follow it from the next bar
+                if live and not p.get('missed') and p.get('user') != 'skipped':
+                    msgs.append([f"🟦 Lệnh LIMIT mua {p['symbol'][:-4]} đã khớp ở ~{fmt(lim)}.",
+                                 f"Nhớ đặt limit chốt lời +{cfg['tp'] * 100:.0f}% = {fmt(lim * (1 + cfg['tp']))} (Reduce Only) nếu chưa đặt."])
+            else:
+                p['entry'] = float(O[c, sb + 1]) * (1 + 0.0002)
             p['tp_price'] = p['entry'] * (1 + cfg['tp'])
         done = None
-        first = max(sb + 1, p.get('checked', sb) + 1)
+        first = max(p.get('first', sb + 1), p.get('checked', sb) + 1)
         for j in range(first, i + 1):
             if p.get('entry') is None:
                 break
@@ -286,9 +301,13 @@ def step(st, i, live=True):
                 usdt = frac * cfg['capital_usdt']
                 msgs.append([f"🟢 MUA {syms[c][:-4]} (futures USDT-M, long)",
                              f"Coin vừa rơi {-det['drop24'][c, k] * 100:.1f}% trong 24h · 10 mô hình: xác suất thắng {p * 100:.0f}%",
-                             f"• Vào lệnh market ngay: ~{usdt:.0f} USDT (≈{frac * 100:.0f}% vốn), đòn bẩy 2–3x margin cross",
-                             f"• Giá lúc tín hiệu: {fmt(CL[c, i])} · BỎ QUA nếu giá đã trên {fmt(CL[c, i] * (1 + cfg['skip_if_above']))}",
-                             f"• Đặt ngay lệnh limit chốt lời +{cfg['tp'] * 100:.0f}% so với giá khớp của bạn (≈{fmt(CL[c, i] * (1 + cfg['tp']))})",
+                             *([f"• Đặt lệnh LIMIT mua ngay ở giá {fmt(CL[c, i] * (1 - cfg['limit_entry']))} (thấp hơn {cfg['limit_entry'] * 100:.1f}%): ~{usdt:.0f} USDT (≈{frac * 100:.0f}% vốn), đòn bẩy 2–3x margin cross",
+                                f"• HỦY lệnh chờ nếu chưa khớp lúc {vn(int(T[i] + 2 * BAR))} (bot sẽ nhắc)",
+                                f"• Khi khớp: đặt limit chốt lời +{cfg['tp'] * 100:.0f}% = {fmt(CL[c, i] * (1 - cfg['limit_entry']) * (1 + cfg['tp']))}"]
+                               if cfg['limit_entry'] else
+                               [f"• Vào lệnh market ngay: ~{usdt:.0f} USDT (≈{frac * 100:.0f}% vốn), đòn bẩy 2–3x margin cross",
+                                f"• Giá lúc tín hiệu: {fmt(CL[c, i])} · BỎ QUA nếu giá đã trên {fmt(CL[c, i] * (1 + cfg['skip_if_above']))}",
+                                f"• Đặt ngay lệnh limit chốt lời +{cfg['tp'] * 100:.0f}% so với giá khớp của bạn (≈{fmt(CL[c, i] * (1 + cfg['tp']))})"]),
                              f"• Không đặt cắt lỗ. Hạn chót đóng lệnh: {vn(pos['deadline_t'])} — bot sẽ nhắc, và báo sớm nếu thị trường sập",
                              f"Đang mở {sum(not q.get('missed') and q.get('user') != 'skipped' for q in st['open'])}/{cfg['max_open']} lệnh. Bấm nút bên dưới để bot biết bạn có vào không.",
                              {'kb': f"{syms[c]}|{int(T[i])}"}])
