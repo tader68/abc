@@ -30,6 +30,9 @@ ap.add_argument('--mkt-exit', type=float, default=0, help='close when the median
 ap.add_argument('--max-open', type=int, default=0, help='maximum simultaneous positions (default 1/size)')
 ap.add_argument('--conf-size', type=float, default=0, help='abs mode: scale each position by 1 + k * (p - thr) / (1 - thr), so more confident signals get more capital')
 ap.add_argument('--min-age-days', type=float, default=0, help='only trade coins listed on futures at least this many days')
+ap.add_argument('--tp-frac', type=float, default=0, help='partial take-profit: close this fraction at the take-profit, let the rest run')
+ap.add_argument('--tp2', type=float, default=0, help='second take-profit for the remainder (0 = hold it until the time / market exit)')
+ap.add_argument('--bars-per-day', type=int, default=6, help='6 for 4h candles, 24 for 1h')
 ap.add_argument('--size', type=float, default=0.1, help='fraction of equity per position')
 ap.add_argument('--side', default='long', choices=['long', 'short'], help='short: sell after a pump instead of buying after a drop')
 ap.add_argument('--thr-mode', default='centered', choices=['centered', 'abs'],
@@ -55,17 +58,18 @@ MAJ40 = MAJ20 + 'INJUSDT,AAVEUSDT,XLMUSDT,ALGOUSDT,SANDUSDT,MANAUSDT,AXSUSDT,GRT
 UNIVERSES = {'12': MAJ12, '20': MAJ20, '40': MAJ40, 'all': syms}  # 'all' includes coins that later died (LUNA, FTT...)
 
 # coin drawdown from its 24h (6-bar) high, known at the close of each bar
+BPD = args.bars_per_day
 hi6 = np.full((C, n), np.nan)
-for k in range(6, n):
-    hi6[:, k] = np.nanmax(Hh[:, k - 6 : k + 1], axis=1)
+for k in range(BPD, n):
+    hi6[:, k] = np.nanmax(Hh[:, k - BPD : k + 1], axis=1)
 drop24 = CL / hi6 - 1
 BTC = syms.index('BTCUSDT')
 with np.errstate(invalid='ignore'):
     _r = np.where(np.isfinite(CL[:, 1:] / CL[:, :-1]), np.log(CL[:, 1:] / CL[:, :-1]), np.nan)
     MKT = np.r_[0, np.nancumsum(np.nanmedian(_r, axis=0))]  # log index of the median coin
 lo6 = np.full((C, n), np.nan)
-for k in range(6, n):
-    lo6[:, k] = np.nanmin(L[:, k - 6 : k + 1], axis=1)
+for k in range(BPD, n):
+    lo6[:, k] = np.nanmin(L[:, k - BPD : k + 1], axis=1)
 rise24 = CL / lo6 - 1
 SIDE = 1 if args.side == 'long' else -1
 
@@ -91,6 +95,7 @@ def run(thr, H, tp, sl, need_drop, universe, from_t, to_t):
         for c in list(open_pos):
             p = open_pos[c]
             px = None
+            tp_hit = False
             e = p['entry']
             if SIDE > 0 and sl and L[c, i] <= e * (1 - sl):
                 px = min(O[c, i], e * (1 - sl))
@@ -98,17 +103,31 @@ def run(thr, H, tp, sl, need_drop, universe, from_t, to_t):
                 px = max(O[c, i], e * (1 + sl))
             elif SIDE > 0 and p['tp'] and Hh[c, i] >= e * (1 + p['tp']):
                 px = max(O[c, i], e * (1 + p['tp']))
+                tp_hit = True
             elif SIDE < 0 and p['tp'] and L[c, i] <= e * (1 - p['tp']):
                 px = min(O[c, i], e * (1 - p['tp']))
+                tp_hit = True
             elif i >= p['exit_bar']:
                 px = O[c, i]
             elif args.btc_exit and i - 1 > p['bar'] and CL[BTC, i - 1] / CL[BTC, p['bar']] - 1 <= -args.btc_exit:
                 px = O[c, i]  # BTC kept falling after the signal: this is a crash, not a dip
             elif args.mkt_exit and i - 1 > p['bar'] and MKT[i - 1] - MKT[p['bar']] <= np.log(1 - args.mkt_exit):
                 px = O[c, i]
+            if tp_hit and np.isfinite(px) and args.tp_frac and not p['part']:
+                # first target reached: bank part of the position, keep the rest open for the second target
+                rp = SIDE * (px / e - 1) - 2 * COST - SIDE * p['fund']
+                eq += p['size'] * args.tp_frac * rp
+                p['booked'] += args.tp_frac * rp
+                p['left'] = 1 - args.tp_frac
+                p['part'] = True
+                p['tp'] = args.tp2
+                if np.isfinite(FUND[c, i]):
+                    p['fund'] += FUND[c, i]
+                continue
             if px is not None and np.isfinite(px):
-                r = SIDE * (px / p['entry'] - 1) - 2 * COST - SIDE * p['fund']
-                eq += p['size'] * r
+                rr = SIDE * (px / p['entry'] - 1) - 2 * COST - SIDE * p['fund']
+                eq += p['size'] * p['left'] * rr
+                r = p['booked'] + p['left'] * rr
                 trades.append(r)
                 trade_bars.append(p['bar'])
                 trade_log.append((syms[c], str(np.datetime64(int(t[p['bar']]), 'ms'))[:16], r))
@@ -121,14 +140,14 @@ def run(thr, H, tp, sl, need_drop, universe, from_t, to_t):
         edge = pr if args.thr_mode == 'abs' else SIDE * (pr - 0.5)
         ok = tradable & np.isfinite(pr) & (edge >= thr) & np.isfinite(O[:, i + 1])
         if args.min_age_days:
-            ok &= (i - FIRST) >= args.min_age_days * 6
+            ok &= (i - FIRST) >= args.min_age_days * args.bars_per_day
         if need_drop:
             ok &= (drop24[:, i] <= -need_drop) if SIDE > 0 else (rise24[:, i] >= need_drop)
         for c in np.where(ok)[0]:
             if c in open_pos or len(open_pos) >= (args.max_open or max(1, int(round(1 / args.size)))):
                 continue
             ptp, pH = (PLAN_TP[c, i], int(PLAN_H[c, i])) if PLAN_TP is not None else (tp, H)
-            open_pos[c] = dict(tp=ptp, entry=O[c, i + 1] * (1 + SIDE * 0.0002), exit_bar=i + 1 + pH, size=args.size * eq * (1 + args.conf_size * (pr[c] - thr) / (1 - thr) if args.conf_size and args.thr_mode == 'abs' else 1), fund=0.0, bar=i)
+            open_pos[c] = dict(tp=ptp, entry=O[c, i + 1] * (1 + SIDE * 0.0002), exit_bar=i + 1 + pH, size=args.size * eq * (1 + args.conf_size * (pr[c] - thr) / (1 - thr) if args.conf_size and args.thr_mode == 'abs' else 1), fund=0.0, bar=i, part=False, booked=0.0, left=1.0)
         peak = max(peak, eq)
         mdd = max(mdd, 1 - eq / peak)
         curve.append((t[i], eq))
@@ -198,7 +217,7 @@ for thr, H, tp, sl, need, uni in grid:
 def label(r):
     thr = f"xác suất thắng ≥{r['thr'] * 100:.0f}%" if args.thr_mode == 'abs' else f"ngưỡng {r['thr'] * 100:.0f}%"
     mv = 'rơi' if SIDE > 0 else 'tăng'
-    return (('SHORT · ' if SIDE < 0 else '') + f"{thr} · giữ {r['H'] // 6} ngày · " + (f"chốt lời +{r['tp'] * 100:.0f}%" if r['tp'] else 'không chốt sớm') + ' · ' +
+    return (('SHORT · ' if SIDE < 0 else '') + f"{thr} · giữ {r['H'] / BPD:g} ngày · " + (f"chốt lời +{r['tp'] * 100:.0f}%" if r['tp'] else 'không chốt sớm') + ' · ' +
             (f"cắt lỗ −{r['sl'] * 100:.0f}%" if r['sl'] else 'không cắt lỗ') + ' · ' + (f"coin phải {mv} ≥{r['need'] * 100:.0f}% trong 24h" if r['need'] else f'không cần điều kiện {mv}') +
             f" · {r['uni']} coin")
 

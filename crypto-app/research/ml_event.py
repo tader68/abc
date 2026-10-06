@@ -39,6 +39,8 @@ ap.add_argument('--hold', type=int, default=12, help='maximum holding period in 
 ap.add_argument('--train-months', type=int, default=12)
 ap.add_argument('--context-only', action='store_true', help='use only the event-context features (ablation)')
 ap.add_argument('--placebo', action='store_true', help='shuffle labels across events: results must collapse')
+ap.add_argument('--bars-per-day', type=int, default=6, help='6 for 4h candles, 24 for 1h')
+ap.add_argument('--subsample', type=int, default=1, help='train on every k-th event (consecutive 1h events are near-duplicates)')
 ap.add_argument('--seed', type=int, default=0)
 ap.add_argument('--save', required=True)
 args = ap.parse_args()
@@ -62,7 +64,9 @@ def roll(a, w, fn):
     return out
 
 
-hi6, lo6, hi18 = roll(Hh, 7, np.nanmax), roll(L, 7, np.nanmin), roll(Hh, 19, np.nanmax)
+BPD = args.bars_per_day
+K8 = max(1, BPD // 3)  # bars in 8 hours
+hi6, lo6, hi18 = roll(Hh, BPD + 1, np.nanmax), roll(L, BPD + 1, np.nanmin), roll(Hh, 3 * BPD + 1, np.nanmax)
 drop24 = CL / hi6 - 1  # <= 0
 rise24 = CL / lo6 - 1  # >= 0
 move = drop24 if S > 0 else rise24
@@ -81,7 +85,7 @@ kinds = {'ev_move': event.copy()}
 if args.event_type == 'any':
     fr, oi, vz = xcol('fundRate'), xcol('oiChg6'), xcol('volZ20')
     r2 = np.full_like(CL, np.nan)
-    r2[:, 2:] = CL[:, 2:] / CL[:, :-2] - 1
+    r2[:, K8:] = CL[:, K8:] / CL[:, :-K8] - 1
     with np.errstate(invalid='ignore'):
         kinds['ev_funding'] = (fr <= 2) if S > 0 else (fr >= 98)  # crowd paying heavily to be short (long side) / long
         kinds['ev_oi_flush'] = (oi <= 2) & (S * r2 < 0)  # open interest collapsing while price moves against: liquidations
@@ -95,7 +99,7 @@ event &= np.isfinite(O[:, np.r_[1:n, n - 1]])
 lr = np.log(CL)
 r1 = np.full_like(CL, np.nan)
 r1[:, 1:] = lr[:, 1:] - lr[:, :-1]
-vol30 = roll(r1, 180, np.nanstd)  # 30-day realised 4h volatility
+vol30 = roll(r1, 30 * BPD, np.nanstd)  # 30-day realised per-bar volatility
 btc = syms.index('BTCUSDT')
 with np.errstate(invalid='ignore'):
     med_drop = np.nanmedian(drop24, axis=0)
@@ -106,15 +110,15 @@ since = np.full((C, n), np.nan)
 for c in range(C):
     last = -10**9
     for i in range(n):
-        since[c, i] = min(i - last, 1000) / 6
+        since[c, i] = min(i - last, 1000 * BPD // 6) / BPD
         if event[c, i]:
             last = i
 r_last = np.full_like(CL, np.nan)
-r_last[:, 2:] = lr[:, 2:] - lr[:, :-2]
+r_last[:, K8:] = lr[:, K8:] - lr[:, :-K8]
 ctx = {
     'drop24': drop24, 'rise24': rise24, 'drop72': CL / hi18 - 1,
     'ret_4h': r1, 'ret_8h': r_last,
-    'move_sigma': move / (vol30 * np.sqrt(6)), 'vol30': vol30,
+    'move_sigma': move / (vol30 * np.sqrt(BPD)), 'vol30': vol30,
     'btc_drop24': np.broadcast_to(drop24[btc], (C, n)), 'btc_rise24': np.broadcast_to(rise24[btc], (C, n)),
     'med_drop24': np.broadcast_to(med_drop, (C, n)), 'med_rise24': np.broadcast_to(med_rise, (C, n)),
     'rel_move': move - np.broadcast_to(med_drop if S > 0 else med_rise, (C, n)),
@@ -157,7 +161,7 @@ if args.placebo:
 ytrain = y if args.target == 'win' else np.clip(ret, -0.2, 0.2)
 print(f'{args.side.upper()} · sự kiện ({args.event_type}): coin {"rơi" if S > 0 else "tăng"} ≥{args.event * 100:.0f}% trong 24h'
       + (' hoặc funding/OI/volume cực đoan' if args.event_type == 'any' else '') + f' · {len(ci):,} mẫu · '
-      f'tỷ lệ thắng gốc {y.mean() * 100:.1f}% · lãi TB {ret.mean() * 100:.2f}%/lệnh (TP {args.tp * 100:.0f}%, giữ tối đa {args.hold * 4}h)')
+      f'tỷ lệ thắng gốc {y.mean() * 100:.1f}% · lãi TB {ret.mean() * 100:.2f}%/lệnh (TP {args.tp * 100:.0f}%, giữ tối đa {args.hold * 24 // BPD}h)')
 
 # --- feature matrix for event samples only ---
 Xc = np.stack([np.asarray(ctx[k])[ci, ii] for k in ctx_names], axis=1).astype(np.float32)
@@ -184,6 +188,7 @@ for m in test_months:
     te = month[ii] == m
     lo = np.argmax(month == m)
     tr = ii < lo - args.hold - 1  # purge: training trades end before the test month starts
+    tr = np.where(tr)[0][:: args.subsample]
     mdl = lgb.train(params, lgb.Dataset(Xe[tr], ytrain[tr]), 300)
     p[te] = mdl.predict(Xe[te])
     imp += mdl.feature_importance('gain')
