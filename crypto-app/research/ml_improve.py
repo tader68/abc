@@ -25,6 +25,9 @@ ap.add_argument('--only', help='evaluate one variant: thr,H,tp,sl,need,uni (e.g.
 ap.add_argument('--context', action='store_true', help='with --only: split trades by macro context (needs macro.npz)')
 ap.add_argument('--cost', type=float, default=0.001, help='fee + slippage per side (0.001 = 0.1%%)')
 ap.add_argument('--show-trades', action='store_true', help='with --only: list best/worst trades and per-coin stats')
+ap.add_argument('--btc-exit', type=float, default=0, help='close all positions when BTC has fallen this much since the signal (checked at each 4h close)')
+ap.add_argument('--mkt-exit', type=float, default=0, help='close when the median coin has fallen this much since the signal')
+ap.add_argument('--max-open', type=int, default=0, help='maximum simultaneous positions (default 1/size)')
 ap.add_argument('--size', type=float, default=0.1, help='fraction of equity per position')
 ap.add_argument('--side', default='long', choices=['long', 'short'], help='short: sell after a pump instead of buying after a drop')
 ap.add_argument('--thr-mode', default='centered', choices=['centered', 'abs'],
@@ -39,7 +42,9 @@ t = np.array(meta['t'], dtype=np.int64)
 C = len(syms)
 P = np.stack([np.fromfile(D / f'P_{s}.bin', dtype=np.float64).reshape(n, 5) for s in syms])
 O, Hh, L, CL, FUND = (P[:, :, k] for k in range(5))
-p_dir = np.load(args.pred)['p_dir']
+_z = np.load(args.pred)
+p_dir = _z['p_dir']
+PLAN_TP, PLAN_H = (_z['tp'], _z['hold']) if 'tp' in _z else (None, None)  # per-signal exit chosen by ml_plan.py
 SPLIT = np.datetime64('2025-01-01').astype('datetime64[ms]').astype(np.int64)
 COST = args.cost  # fee + slippage per side
 MAJ12 = 'BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,LINKUSDT,AVAXUSDT,LTCUSDT,TRXUSDT,DOTUSDT'.split(',')
@@ -50,6 +55,10 @@ hi6 = np.full((C, n), np.nan)
 for k in range(6, n):
     hi6[:, k] = np.nanmax(Hh[:, k - 6 : k + 1], axis=1)
 drop24 = CL / hi6 - 1
+BTC = syms.index('BTCUSDT')
+with np.errstate(invalid='ignore'):
+    _r = np.where(np.isfinite(CL[:, 1:] / CL[:, :-1]), np.log(CL[:, 1:] / CL[:, :-1]), np.nan)
+    MKT = np.r_[0, np.nancumsum(np.nanmedian(_r, axis=0))]  # log index of the median coin
 lo6 = np.full((C, n), np.nan)
 for k in range(6, n):
     lo6[:, k] = np.nanmin(L[:, k - 6 : k + 1], axis=1)
@@ -82,11 +91,15 @@ def run(thr, H, tp, sl, need_drop, universe, from_t, to_t):
                 px = min(O[c, i], e * (1 - sl))
             elif SIDE < 0 and sl and Hh[c, i] >= e * (1 + sl):
                 px = max(O[c, i], e * (1 + sl))
-            elif SIDE > 0 and tp and Hh[c, i] >= e * (1 + tp):
-                px = max(O[c, i], e * (1 + tp))
-            elif SIDE < 0 and tp and L[c, i] <= e * (1 - tp):
-                px = min(O[c, i], e * (1 - tp))
+            elif SIDE > 0 and p['tp'] and Hh[c, i] >= e * (1 + p['tp']):
+                px = max(O[c, i], e * (1 + p['tp']))
+            elif SIDE < 0 and p['tp'] and L[c, i] <= e * (1 - p['tp']):
+                px = min(O[c, i], e * (1 - p['tp']))
             elif i >= p['exit_bar']:
+                px = O[c, i]
+            elif args.btc_exit and i - 1 > p['bar'] and CL[BTC, i - 1] / CL[BTC, p['bar']] - 1 <= -args.btc_exit:
+                px = O[c, i]  # BTC kept falling after the signal: this is a crash, not a dip
+            elif args.mkt_exit and i - 1 > p['bar'] and MKT[i - 1] - MKT[p['bar']] <= np.log(1 - args.mkt_exit):
                 px = O[c, i]
             if px is not None and np.isfinite(px):
                 r = SIDE * (px / p['entry'] - 1) - 2 * COST - SIDE * p['fund']
@@ -105,9 +118,10 @@ def run(thr, H, tp, sl, need_drop, universe, from_t, to_t):
         if need_drop:
             ok &= (drop24[:, i] <= -need_drop) if SIDE > 0 else (rise24[:, i] >= need_drop)
         for c in np.where(ok)[0]:
-            if c in open_pos or len(open_pos) >= max(1, int(round(1 / args.size))):
+            if c in open_pos or len(open_pos) >= (args.max_open or max(1, int(round(1 / args.size)))):
                 continue
-            open_pos[c] = dict(entry=O[c, i + 1] * (1 + SIDE * 0.0002), exit_bar=i + 1 + H, size=args.size * eq, fund=0.0, bar=i)
+            ptp, pH = (PLAN_TP[c, i], int(PLAN_H[c, i])) if PLAN_TP is not None else (tp, H)
+            open_pos[c] = dict(tp=ptp, entry=O[c, i + 1] * (1 + SIDE * 0.0002), exit_bar=i + 1 + pH, size=args.size * eq, fund=0.0, bar=i)
         peak = max(peak, eq)
         mdd = max(mdd, 1 - eq / peak)
         curve.append((t[i], eq))

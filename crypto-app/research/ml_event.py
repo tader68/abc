@@ -31,6 +31,9 @@ ap = argparse.ArgumentParser()
 ap.add_argument('--dir', default=str(Path(__file__).parent / '.cache/ml/panel_4h'))
 ap.add_argument('--side', default='long', choices=['long', 'short'])
 ap.add_argument('--event', type=float, default=0.05, help='minimum 24h move that defines an event')
+ap.add_argument('--event-type', default='drop', choices=['drop', 'any'],
+                help='drop: 24h move only; any: also extreme funding, open-interest flush/surge, volume spike against the move')
+ap.add_argument('--target', default='win', choices=['win', 'ret'], help='win: classify profitable trade; ret: regress the trade return')
 ap.add_argument('--tp', type=float, default=0.04, help='take-profit used to label the trade')
 ap.add_argument('--hold', type=int, default=12, help='maximum holding period in bars used to label the trade')
 ap.add_argument('--train-months', type=int, default=12)
@@ -64,6 +67,28 @@ drop24 = CL / hi6 - 1  # <= 0
 rise24 = CL / lo6 - 1  # >= 0
 move = drop24 if S > 0 else rise24
 event = (move <= -args.event) if S > 0 else (move >= args.event)
+def xcol(nm):
+    out = np.full((C, n), np.nan, dtype=np.float32)
+    k = names.index(nm)
+    for c in range(C):
+        v = np.memmap(D / f'X_{syms[c]}.bin', dtype=np.uint8, mode='r', shape=(n, F))[:, k].astype(np.float32)
+        v[v == 255] = np.nan
+        out[c] = v
+    return out
+
+
+kinds = {'ev_move': event.copy()}
+if args.event_type == 'any':
+    fr, oi, vz = xcol('fundRate'), xcol('oiChg6'), xcol('volZ20')
+    r2 = np.full_like(CL, np.nan)
+    r2[:, 2:] = CL[:, 2:] / CL[:, :-2] - 1
+    with np.errstate(invalid='ignore'):
+        kinds['ev_funding'] = (fr <= 2) if S > 0 else (fr >= 98)  # crowd paying heavily to be short (long side) / long
+        kinds['ev_oi_flush'] = (oi <= 2) & (S * r2 < 0)  # open interest collapsing while price moves against: liquidations
+        kinds['ev_oi_surge'] = (oi >= 98) & (S * r2 < 0)  # new positions piling in against the move
+        kinds['ev_vol_spike'] = (vz >= 98) & (S * r2 <= -0.02)  # capitulation volume
+    for k, v in kinds.items():
+        event |= v
 event &= np.isfinite(O[:, np.r_[1:n, n - 1]])
 
 # --- event context features (all known at the close of bar i) ---
@@ -97,6 +122,8 @@ ctx = {
     'funding': FUND, 'days_since_event': since,
     'bounce_from_low': CL / lo6 - 1 if S > 0 else CL / hi6 - 1,
 }
+if args.event_type == 'any':
+    ctx.update({k: v.astype(np.float32) for k, v in kinds.items()})
 ctx_names = list(ctx)
 
 # --- trade label: enter at the open of i+1, exit at TP or after `hold` bars ---
@@ -125,8 +152,11 @@ ok = np.isfinite(ret)
 ci, ii, ret = ci[ok], ii[ok], ret[ok]
 y = (ret > 0).astype(int)
 if args.placebo:
-    np.random.default_rng(1).shuffle(y)
-print(f'{args.side.upper()} · sự kiện: coin {"rơi" if S > 0 else "tăng"} ≥{args.event * 100:.0f}% trong 24h · {len(ci):,} mẫu · '
+    perm = np.random.default_rng(1).permutation(len(y))
+    y, ret = y[perm], ret[perm]
+ytrain = y if args.target == 'win' else np.clip(ret, -0.2, 0.2)
+print(f'{args.side.upper()} · sự kiện ({args.event_type}): coin {"rơi" if S > 0 else "tăng"} ≥{args.event * 100:.0f}% trong 24h'
+      + (' hoặc funding/OI/volume cực đoan' if args.event_type == 'any' else '') + f' · {len(ci):,} mẫu · '
       f'tỷ lệ thắng gốc {y.mean() * 100:.1f}% · lãi TB {ret.mean() * 100:.2f}%/lệnh (TP {args.tp * 100:.0f}%, giữ tối đa {args.hold * 4}h)')
 
 # --- feature matrix for event samples only ---
@@ -145,7 +175,7 @@ else:
 month = np.array([np.datetime64(int(x), 'ms').astype('datetime64[M]') for x in t])
 months = np.unique(month[ii])
 test_months = [m for m in months if m >= np.datetime64('2022-02')]
-params = dict(objective='binary', learning_rate=0.03, num_leaves=15, min_data_in_leaf=200, feature_fraction=0.5,
+params = dict(objective='binary' if args.target == 'win' else 'huber', alpha=0.05, learning_rate=0.03, num_leaves=15, min_data_in_leaf=200, feature_fraction=0.5,
               bagging_fraction=0.7, bagging_freq=1, lambda_l2=10.0, verbose=-1, num_threads=4, seed=args.seed)
 p = np.full(len(ci), np.nan)
 imp = np.zeros(len(fnames))
@@ -154,7 +184,7 @@ for m in test_months:
     te = month[ii] == m
     lo = np.argmax(month == m)
     tr = ii < lo - args.hold - 1  # purge: training trades end before the test month starts
-    mdl = lgb.train(params, lgb.Dataset(Xe[tr], y[tr]), 300)
+    mdl = lgb.train(params, lgb.Dataset(Xe[tr], ytrain[tr]), 300)
     p[te] = mdl.predict(Xe[te])
     imp += mdl.feature_importance('gain')
     print(f'  {m}: {tr.sum():,} sự kiện để học · {te.sum():,} để dự đoán · {time.time() - t0:.0f}s', flush=True)
