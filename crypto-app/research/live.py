@@ -133,7 +133,7 @@ def load_state(path):
 
 def save_state(st, path):
     if path:
-        Path(path).write_text(json.dumps(st, indent=1), encoding='utf-8')
+        Path(path).write_text(json.dumps(st, indent=1, default=lambda o: o.item() if hasattr(o, 'item') else str(o)), encoding='utf-8')
 
 
 def report(st):
@@ -345,7 +345,7 @@ if st['last_bar'] >= T[i_last]:
 # bars missed while the computer was off: replay them for exits / bookkeeping, but do not ask to enter late
 start = int(np.searchsorted(T, st['last_bar']) + 1) if st['last_bar'] else i_last
 start = max(start, i_last - 6 * 7)
-late = age_h > 2 and not args.asof  # back online too long after the close: the entry price has moved on
+late = bool(age_h > 2 and not args.asof)  # back online too long after the close: the entry price has moved on
 for i in range(start, i_last + 1):
     for m in step(st, i, live=(i == i_last and not late)):
         if i == i_last:
@@ -404,8 +404,12 @@ for m in guard(st):
     send(m)
 save_state(st, args.state)
 if not args.asof and not args.dry_run:
-    HISTORY.mkdir(parents=True, exist_ok=True)
-    with open(HISTORY / 'runs.jsonl', 'a', encoding='utf-8') as f:
-        f.write(json.dumps({'type': 'run', 'run_at': vn(int(dt.datetime.now(dt.timezone.utc).timestamp() * 1000)), 'bar_close': vn(int(T[i_last] + BAR)),
-                            'data_age_h': round(age_h, 2), 'coins': C, 'late': late, 'open': len(st['open']), **RUN}, ensure_ascii=False) + '\n')
+    try:  # the run log is for later analysis: it must never make the run fail
+        HISTORY.mkdir(parents=True, exist_ok=True)
+        with open(HISTORY / 'runs.jsonl', 'a', encoding='utf-8') as f:
+            f.write(json.dumps({'type': 'run', 'run_at': vn(int(dt.datetime.now(dt.timezone.utc).timestamp() * 1000)), 'bar_close': vn(int(T[i_last] + BAR)),
+                                'data_age_h': round(float(age_h), 2), 'coins': C, 'late': late, 'open': len(st['open']), **RUN},
+                               ensure_ascii=False, default=lambda o: o.item() if hasattr(o, 'item') else str(o)) + '\n')
+    except Exception as e:  # noqa: BLE001
+        print(f'(không ghi được history/runs.jsonl: {e})')
 print(f'Đã xử lý nến đóng lúc {vn(T[i_last] + BAR)} (giờ VN). Lệnh mở: {len(st["open"])}.')
